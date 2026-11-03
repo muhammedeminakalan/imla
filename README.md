@@ -2,7 +2,7 @@
 
 Hold a shortcut, speak, release: the speech is transcribed by an audio model on OpenRouter
 (default `openai/gpt-audio-mini`) and pasted into the focused window. No window, only a small HUD
-pill at the top of the screen while it listens (red dot + level meter) and transcribes (dots).
+pill at the top of the screen: Hex's "Dot scope" (dots lit by braided traces that follow the voice, flowing light while transcribing).
 Built for KDE Plasma on Wayland. The working logic follows [Hex](https://github.com/anomalyco/hex)
 (MIT); no Hex code is copied.
 
@@ -19,7 +19,7 @@ Built for KDE Plasma on Wayland. The working logic follows [Hex](https://github.
   Ctrl+Shift+V) is pressed through the RemoteDesktop portal (keyboard only; KDE asks once, the
   grant is kept with a restore token in `~/.local/state/dictate/`). The previous clipboard text is
   restored afterwards. Without the portal grant the text is only left on the clipboard.
-- **HUD:** wlr layer-shell overlay drawn with tiny-skia on its own thread; click-through.
+- **HUD:** wlr layer-shell overlay on its own thread; click-through. Hex's Dot scope ported to Rust (`src/hud/`, MIT, see `THIRD_PARTY_NOTICES.md`), shader evaluated on the CPU into wl_shm at ~60 fps while visible, idle when hidden. `HudMsg::Level` carries linear RMS.
 
 ## Build (no Rust toolchain on the machine; Docker)
 

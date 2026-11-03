@@ -18,7 +18,6 @@ rpassword = "7.5.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["calloop"] }
-tiny-skia = "0.12.0"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util", "signal"] }
 toml = "1.1.8"
 wayland-client = "0.31.15"

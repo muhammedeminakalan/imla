@@ -17,7 +17,7 @@ pub struct Recording {
     reader: JoinHandle<Vec<i16>>,
 }
 
-/// Starts recording; `levels` receives the loudness (0..1) of every ~32 ms chunk.
+/// Starts recording; `levels` receives the linear RMS (0..1) of every ~32 ms chunk.
 pub fn start(levels: mpsc::UnboundedSender<f32>) -> Result<Recording> {
     let mut child = Command::new("pw-record")
         .args(["--raw", "--rate", &SAMPLE_RATE.to_string(), "--channels", "1", "--format", "s16", "-"])
@@ -45,8 +45,8 @@ pub fn start(levels: mpsc::UnboundedSender<f32>) -> Result<Recording> {
             let rms = (chunk.iter().map(|&s| (s as f32 / 32768.0).powi(2)).sum::<f32>()
                 / chunk.len().max(1) as f32)
                 .sqrt();
-            // speech sits around 0.02-0.2 RMS; spread it over 0..1 for the meter
-            let _ = levels.send((rms * 6.0).sqrt().min(1.0));
+            // linear RMS; the HUD turns it into dBFS and auto-levels it
+            let _ = levels.send(rms.min(1.0));
             samples.extend_from_slice(&chunk);
         }
         samples

@@ -100,16 +100,24 @@ async fn main() -> Result<()> {
         Cmd::Uninstall => uninstall(),
         Cmd::HudDemo => {
             let hud = hud::spawn();
+            // listen -> transcribe -> done
             let _ = hud.send(HudMsg::Listen);
-            for i in 0..90 {
-                let l = ((i as f32 * 0.37).sin().abs() * 0.8 + 0.1).min(1.0);
-                let _ = hud.send(HudMsg::Level(l));
+            for i in 0..180 {
+                let _ = hud.send(HudMsg::Level(hud::demo_rms(i as f32 * 0.033)));
                 tokio::time::sleep(Duration::from_millis(33)).await;
             }
             let _ = hud.send(HudMsg::Busy);
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let _ = hud.send(HudMsg::Hide);
+            tokio::time::sleep(Duration::from_millis(2000)).await;
+            // listen -> error
+            let _ = hud.send(HudMsg::Listen);
+            for i in 0..45 {
+                let _ = hud.send(HudMsg::Level(hud::demo_rms(i as f32 * 0.033)));
+                tokio::time::sleep(Duration::from_millis(33)).await;
+            }
             let _ = hud.send(HudMsg::Error);
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_millis(2000)).await;
             Ok(())
         }
     }

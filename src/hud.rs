@@ -1,12 +1,18 @@
-//! The dictation HUD: a small click-through pill at the top of the screen (wlr layer-shell,
-//! which KWin supports). Listening shows a red dot and a live level meter; transcribing shows
-//! three pulsing dots; an error flashes the pill red. It runs on its own thread with its own
-//! Wayland connection and never blocks the dictation loop.
+//! The dictation HUD: Hex's "Dot scope" (ported from anomalyco/hex, MIT, see
+//! `THIRD_PARTY_NOTICES.md`) as a small click-through overlay at the top of the screen (wlr
+//! layer-shell, which KWin supports). A field of dots lit by braided traces follows the voice
+//! while listening, flows while transcribing, clears when done and turns coral on an error. It
+//! runs on its own thread with its own Wayland connection and never blocks the dictation loop;
+//! while hidden the thread sleeps.
 
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+#[allow(dead_code)]
+mod dot_scope;
+mod indicator;
+mod shader;
+#[allow(dead_code)]
+mod spring;
+
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use smithay_client_toolkit::{
@@ -31,7 +37,8 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
+
+use self::indicator::Indicator;
 use wayland_client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
@@ -41,23 +48,23 @@ use wayland_client::{
 #[derive(Debug, Clone, Copy)]
 pub enum HudMsg {
     Listen,
+    /// The microphone's RMS, 0..1 linear.
     Level(f32),
     Busy,
     Error,
     Hide,
 }
 
-#[derive(PartialEq, Clone, Copy)]
-enum Mode {
-    Hidden,
-    Listening,
-    Busy,
-    Error,
-}
+/// The layer surface in points: room for the widest plate, its bounce and drop shadow.
+const W: u32 = 168;
+const H: u32 = 60;
+const FRAME: Duration = Duration::from_micros(16_667);
 
-const W: u32 = 176;
-const H: u32 = 44;
-const BARS: usize = 14;
+/// Hex's synthetic voice (phrases of syllables with breaths) as the linear RMS a microphone
+/// would report `time` seconds in, for `hud-demo`.
+pub fn demo_rms(time: f32) -> f32 {
+    10f32.powf(dot_scope::demo_loudness(time) / 20.0)
+}
 
 /// Starts the HUD thread. Without a Wayland session or layer-shell it logs why and returns a
 /// sender whose messages are dropped, so dictation still works.
@@ -84,9 +91,10 @@ struct Hud {
     pool: SlotPool,
     layer: Option<LayerSurface>,
     configured: bool,
-    mode: Mode,
-    levels: VecDeque<f32>,
-    since: Instant,
+    model: Indicator,
+    /// Integer buffer scale of the output the surface is on.
+    scale: i32,
+    last_step: Instant,
 }
 
 fn run(rx: Channel<HudMsg>) -> Result<()> {
@@ -106,9 +114,9 @@ fn run(rx: Channel<HudMsg>) -> Result<()> {
         pool,
         layer: None,
         configured: false,
-        mode: Mode::Hidden,
-        levels: VecDeque::from(vec![0.0; BARS]),
-        since: Instant::now(),
+        model: Indicator::new(Instant::now()),
+        scale: 1,
+        last_step: Instant::now(),
     };
 
     let mut event_loop: EventLoop<Hud> = EventLoop::try_new()?;
@@ -125,17 +133,22 @@ fn run(rx: Channel<HudMsg>) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    let mut next_frame = Instant::now();
     loop {
-        let tick = if hud.mode == Mode::Hidden { None } else { Some(Duration::from_millis(33)) };
+        // hidden: sleep until a message arrives; visible: wake for the next ~60 fps frame
+        let tick = hud.model.active().then(|| next_frame.saturating_duration_since(Instant::now()));
         event_loop.dispatch(tick, &mut hud)?;
-        if hud.mode == Mode::Error && hud.since.elapsed() > Duration::from_millis(900) {
-            hud.hide();
-        }
-        if hud.mode != Mode::Hidden && hud.layer.is_none() {
-            hud.create_layer(&qh); // the compositor closed it (e.g. output change) while visible
-        }
-        if hud.configured {
-            hud.draw();
+        let now = Instant::now();
+        if hud.model.active() {
+            if hud.layer.is_none() {
+                hud.create_layer(&qh); // the compositor closed it (e.g. output change) while visible
+            }
+            if now >= next_frame {
+                hud.frame(now);
+                next_frame = if now.duration_since(next_frame) > FRAME * 4 { now + FRAME } else { next_frame + FRAME };
+            }
+        } else if hud.layer.is_some() {
+            hud.destroy_layer(); // faded out: unmap and stop waking up
         }
         conn.flush()?;
     }
@@ -143,40 +156,40 @@ fn run(rx: Channel<HudMsg>) -> Result<()> {
 
 impl Hud {
     fn handle(&mut self, msg: HudMsg, qh: &QueueHandle<Self>) {
+        let now = Instant::now();
         match msg {
             HudMsg::Listen => {
-                self.levels.iter_mut().for_each(|l| *l = 0.0);
-                self.set_mode(Mode::Listening, qh);
-            }
-            HudMsg::Level(l) => {
-                if self.mode == Mode::Listening {
-                    self.levels.pop_front();
-                    self.levels.push_back(l);
+                if !self.model.active() {
+                    self.last_step = now;
                 }
+                self.model.listen(now);
+                self.create_layer(qh);
             }
-            HudMsg::Busy => self.set_mode(Mode::Busy, qh),
-            HudMsg::Error => self.set_mode(Mode::Error, qh),
-            HudMsg::Hide => self.hide(),
+            HudMsg::Level(l) => self.model.level(l),
+            HudMsg::Busy => {
+                self.model.busy(now);
+                self.create_layer(qh);
+            }
+            HudMsg::Error => {
+                self.model.fail(now);
+                self.create_layer(qh);
+            }
+            HudMsg::Hide => self.model.hide(now),
         }
-    }
-
-    fn set_mode(&mut self, mode: Mode, qh: &QueueHandle<Self>) {
-        self.mode = mode;
-        self.since = Instant::now();
-        self.create_layer(qh);
     }
 
     fn create_layer(&mut self, qh: &QueueHandle<Self>) {
         if self.layer.is_none() {
+            self.last_step = Instant::now();
             let surface = self.compositor.create_surface(qh);
             // empty input region: clicks go through to the window below
             if let Ok(region) = Region::new(&self.compositor) {
                 surface.set_input_region(Some(region.wl_region()));
             }
+            surface.set_buffer_scale(self.scale);
             let layer =
                 self.layer_shell.create_layer_surface(qh, surface, Layer::Overlay, Some("dictate-hud"), None);
             layer.set_anchor(Anchor::TOP);
-            layer.set_margin(18, 0, 0, 0);
             layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer.set_size(W, H);
             layer.commit();
@@ -185,98 +198,51 @@ impl Hud {
         }
     }
 
-    fn hide(&mut self) {
-        self.mode = Mode::Hidden;
+    fn destroy_layer(&mut self) {
         self.layer = None; // dropping the layer surface unmaps it
         self.configured = false;
     }
 
+    /// Steps the animation to `now` and draws it.
+    fn frame(&mut self, now: Instant) {
+        let dt = now.duration_since(self.last_step).as_secs_f32();
+        self.last_step = now;
+        self.model.step(now, dt);
+        if self.configured {
+            self.draw();
+        }
+    }
+
     fn draw(&mut self) {
         let Some(layer) = &self.layer else { return };
-        let Some(mut pm) = Pixmap::new(W, H) else { return };
-        let t = self.since.elapsed().as_secs_f32();
-        let (w, h) = (W as f32, H as f32);
-
-        let mut paint = Paint { anti_alias: true, ..Paint::default() };
-        let bg = if self.mode == Mode::Error {
-            Color::from_rgba8(150, 30, 36, 235)
-        } else {
-            Color::from_rgba8(18, 18, 22, 225)
-        };
-        paint.set_color(bg);
-        if let Some(p) = rounded(0.5, 0.5, w - 1.0, h - 1.0, (h - 1.0) / 2.0) {
-            pm.fill_path(&p, &paint, FillRule::Winding, Transform::identity(), None);
-        }
-
-        match self.mode {
-            Mode::Listening => {
-                let pulse = 0.75 + 0.25 * (t * 4.0).sin();
-                paint.set_color(Color::from_rgba8(240, 70, 70, (255.0 * pulse) as u8));
-                circle(&mut pm, &paint, 22.0, h / 2.0, 6.0);
-                let (x0, gap, bw) = (40.0, 9.0, 5.0);
-                paint.set_color(Color::from_rgba8(235, 235, 240, 240));
-                for (i, l) in self.levels.iter().enumerate() {
-                    let bh = (4.0 + l * (h - 16.0)).min(h - 12.0);
-                    if let Some(p) = rounded(x0 + i as f32 * gap, (h - bh) / 2.0, bw, bh, bw / 2.0) {
-                        pm.fill_path(&p, &paint, FillRule::Winding, Transform::identity(), None);
-                    }
-                }
-            }
-            Mode::Busy => {
-                for i in 0..3 {
-                    let phase = (t * 5.0 - i as f32 * 0.7).sin() * 0.5 + 0.5;
-                    paint.set_color(Color::from_rgba8(235, 235, 240, (90.0 + 165.0 * phase) as u8));
-                    circle(&mut pm, &paint, w / 2.0 - 20.0 + i as f32 * 20.0, h / 2.0, 4.0 + 1.5 * phase);
-                }
-            }
-            Mode::Error => {
-                paint.set_color(Color::from_rgba8(255, 255, 255, 240));
-                circle(&mut pm, &paint, w / 2.0, h / 2.0, 5.0);
-            }
-            Mode::Hidden => return,
-        }
-
-        let stride = W as i32 * 4;
-        let Ok((buffer, canvas)) = self.pool.create_buffer(W as i32, H as i32, stride, wl_shm::Format::Argb8888)
+        let scale = self.scale.max(1);
+        let (w, h) = (W as i32 * scale, H as i32 * scale);
+        let Ok((buffer, canvas)) =
+            self.pool.create_buffer(w, h, w * 4, wl_shm::Format::Argb8888)
         else {
             return;
         };
-        // tiny-skia gives premultiplied RGBA; wl_shm ARGB8888 is premultiplied BGRA in memory
-        for (dst, src) in canvas.chunks_exact_mut(4).zip(pm.data().chunks_exact(4)) {
-            dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
-        }
+        // premultiplied BGRA, which is what wl_shm ARGB8888 is in memory
+        shader::render(&self.model, w as u32, h as u32, scale as f32, canvas);
         let surface = layer.wl_surface();
-        surface.damage_buffer(0, 0, W as i32, H as i32);
+        surface.damage_buffer(0, 0, w, h);
         if buffer.attach_to(surface).is_ok() {
             layer.commit();
         }
     }
 }
 
-fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
-    let r = r.min(w / 2.0).min(h / 2.0);
-    let mut pb = PathBuilder::new();
-    pb.move_to(x + r, y);
-    pb.line_to(x + w - r, y);
-    pb.quad_to(x + w, y, x + w, y + r);
-    pb.line_to(x + w, y + h - r);
-    pb.quad_to(x + w, y + h, x + w - r, y + h);
-    pb.line_to(x + r, y + h);
-    pb.quad_to(x, y + h, x, y + h - r);
-    pb.line_to(x, y + r);
-    pb.quad_to(x, y, x + r, y);
-    pb.close();
-    pb.finish()
-}
-
-fn circle(pm: &mut Pixmap, paint: &Paint, cx: f32, cy: f32, r: f32) {
-    if let Some(p) = PathBuilder::from_circle(cx, cy, r) {
-        pm.fill_path(&p, paint, FillRule::Winding, Transform::identity(), None);
-    }
-}
-
 impl CompositorHandler for Hud {
-    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
+    ) {
+        self.scale = new_factor.max(1);
+        surface.set_buffer_scale(self.scale);
+    }
     fn transform_changed(
         &mut self,
         _: &Connection,
