@@ -30,7 +30,20 @@ flowing light while transcribing). Built for KDE Plasma on Wayland. Third-party 
 
 The binary only links glibc (`target/release/dictate`).
 
-## Install and use
+## Arch package
+
+```bash
+make package                                  # tests, Docker build, dist/, makepkg
+sudo pacman -U packaging/arch/dictate-*-x86_64.pkg.tar.zst
+dictate setup                                 # once per user: key, terms; enables the user service
+```
+
+The package ships `/usr/bin/dictate`, the user unit `app-dev.akalan.dictate.service` and the
+`.desktop` entry. Run from `/usr/bin`, `setup` only enables the packaged unit and removes a copy an
+earlier non-package `setup` left in `~/.local/bin` / `~/.config/systemd/user`. Version: `pkgver` in
+the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
+
+## Install and use (without the package)
 
 ```bash
 ./target/release/dictate setup   # asks the OpenRouter key, terms; installs ~/.local/bin/dictate,

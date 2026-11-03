@@ -417,7 +417,11 @@ async fn setup(shortcut: Option<String>, terminal_paste: bool) -> Result<()> {
     cfg.save()?;
     println!("Ayarlar kaydedildi: {}", config::path().display());
 
-    install_files()?;
+    if packaged() {
+        remove_home_install(); // a copy from before the package would shadow it
+    } else {
+        install_files()?;
+    }
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", UNIT])?;
     systemctl(&["restart", UNIT])?;
@@ -444,6 +448,21 @@ async fn check_key(key: &str) -> Result<()> {
     }
     println!("Anahtar doğrulandı.");
     Ok(())
+}
+
+/// Installed by the Arch package: binary in /usr/bin, unit and desktop entry under /usr.
+fn packaged() -> bool {
+    std::env::current_exe().map(|p| p.starts_with("/usr/")).unwrap_or(false)
+}
+
+/// Removes the per-user copy `setup` made before the package existed.
+fn remove_home_install() {
+    let _ = systemctl(&["disable", "--now", UNIT]);
+    for p in [unit_path(), desktop_path(), bin_path()] {
+        if p.exists() && fs::remove_file(&p).is_ok() {
+            println!("Eski kurulum kaldırıldı: {}", p.display());
+        }
+    }
 }
 
 fn install_files() -> Result<()> {
@@ -490,6 +509,11 @@ fn systemctl(args: &[&str]) -> Result<()> {
 
 fn uninstall() -> Result<()> {
     let _ = systemctl(&["disable", "--now", UNIT]);
+    if packaged() {
+        println!("Servis kapatıldı. Programı kaldırmak için: sudo pacman -R dictate");
+        println!("Ayarlar duruyor: {}", config::path().display());
+        return Ok(());
+    }
     for p in [unit_path(), desktop_path(), bin_path()] {
         if p.exists() {
             fs::remove_file(&p)?;

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=dictate
+Comment=Sesle yazdırma
+Exec=/usr/bin/dictate daemon
+Icon=audio-input-microphone
+NoDisplay=true
+Terminal=false
