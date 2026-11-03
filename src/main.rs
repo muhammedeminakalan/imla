@@ -80,7 +80,7 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("dictate=info,zbus=error")).init();
     match Cli::parse().cmd {
         Cmd::Setup { shortcut, terminal_paste } => setup(shortcut, terminal_paste).await,
         Cmd::Daemon => daemon().await,
