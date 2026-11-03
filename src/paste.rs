@@ -46,7 +46,7 @@ impl Paster {
             .start(&session, None, StartOptions::default())
             .await?
             .response()
-            .context("klavye izni verilmedi")?;
+            .context(crate::i18n::t("klavye izni verilmedi", "keyboard access was not granted"))?;
         if let Some(t) = started.restore_token() {
             let dir = state_dir();
             fs::create_dir_all(&dir)?;
@@ -90,7 +90,7 @@ impl Paster {
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(700)).await;
                 if let Err(e) = set_clipboard(prev).await {
-                    log::warn!("eski pano geri konamadı: {e:#}");
+                    log::warn!("{}", crate::tf!("eski pano geri konamadı: {e:#}", "could not restore the clipboard: {e:#}"));
                 }
             });
         }
@@ -103,7 +103,7 @@ pub async fn set_clipboard(text: String) -> Result<()> {
         copy::Options::new().copy(copy::Source::Bytes(text.into_bytes().into()), copy::MimeType::Text)
     })
     .await?
-    .context("panoya yazılamadı")
+    .context(crate::i18n::t("panoya yazılamadı", "could not write the clipboard"))
 }
 
 /// The current clipboard text, if it is text and answers quickly (a stuck owner must not hang us).

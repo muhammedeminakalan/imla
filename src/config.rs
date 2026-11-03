@@ -19,7 +19,7 @@ pub struct Config {
     pub api_key: String,
     /// OpenRouter model that takes audio input.
     pub model: String,
-    /// ISO-639-1 language of the speech.
+    /// ISO-639-1 language of the speech, or "auto": written in whatever language is spoken.
     pub language: String,
     /// Words the model should spell exactly (names, jargon); sent as hints with every request.
     pub terms: Vec<String>,
@@ -42,7 +42,7 @@ impl Default for Config {
         Self {
             api_key: String::new(),
             model: "openai/gpt-audio-mini".into(),
-            language: "tr".into(),
+            language: "auto".into(),
             terms: Vec::new(),
             shortcut: "CTRL+ALT+D".into(),
             paste_keys: "ctrl+v".into(),
@@ -70,9 +70,9 @@ impl Config {
     pub fn load() -> Result<Self> {
         let p = path();
         let mut cfg: Self = match fs::read_to_string(&p) {
-            Ok(s) => toml::from_str(&s).with_context(|| format!("{} okunamadı", p.display()))?,
+            Ok(s) => toml::from_str(&s).with_context(|| crate::tf!("{} okunamadı", "could not read {}", p.display()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
-            Err(e) => return Err(e).with_context(|| format!("{} okunamadı", p.display())),
+            Err(e) => return Err(e).with_context(|| crate::tf!("{} okunamadı", "could not read {}", p.display())),
         };
         if cfg.api_key.is_empty() {
             cfg.api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();

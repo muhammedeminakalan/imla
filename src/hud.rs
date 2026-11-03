@@ -74,7 +74,7 @@ pub fn spawn() -> Sender<HudMsg> {
         .spawn(move || {
             // a lost compositor connection ends the HUD only; dictation keeps working
             if let Err(e) = run(rx) {
-                log::warn!("HUD kapalı: {e:#}");
+                log::warn!("{}", crate::tf!("HUD kapalı: {e:#}", "HUD off: {e:#}"));
             }
         })
         .expect("HUD thread");

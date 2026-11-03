@@ -42,6 +42,11 @@ The package ships `/usr/bin/dictate`, the user unit `app-dev.akalan.dictate.serv
 `.desktop` entry. `setup` enables the packaged unit. Version: `pkgver` in
 the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 
+## Languages
+
+- Speech: any language the model understands; `language = "auto"` (default) detects it per clip.
+- Interface (CLI help, messages, logs): Turkish when the session locale (`LC_ALL`/`LC_MESSAGES`/`LANG`) is Turkish, English otherwise (`src/i18n.rs`, `t()` / `tf!`).
+
 ## Commands
 
 - `dictate setup [--shortcut KEYS] [--terminal-paste]`: key, terms; enables and restarts the service
@@ -51,6 +56,6 @@ the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 
 ## Config (`~/.config/dictate/config.toml`, 0600)
 
-`api_key`, `model`, `sound_effects` / `sound_volume` (start/stop/cancel tones via `pw-play`, default on, 0.5), `language` (`tr`), `terms` (list), `shortcut`, `paste_keys`
+`api_key`, `model`, `sound_effects` / `sound_volume` (start/stop/cancel tones via `pw-play`, default on, 0.5), `language` (`auto` = written in whatever language is spoken, mixed speech kept as spoken; or an ISO 639-1 code such as `tr`, `en`, `de`; `dictate setup --language xx`), `terms` (list), `shortcut`, `paste_keys`
 (`ctrl+v` / `ctrl+shift+v`), `restore_clipboard`, `max_seconds`. `OPENROUTER_API_KEY` in the
 environment is used when `api_key` is empty.

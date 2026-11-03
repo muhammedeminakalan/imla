@@ -25,8 +25,8 @@ pub fn start(levels: mpsc::UnboundedSender<f32>) -> Result<Recording> {
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .context("pw-record başlatılamadı (PipeWire araçları gerekli)")?;
-    let mut out = child.stdout.take().context("pw-record çıktısı yok")?;
+        .context(crate::i18n::t("pw-record başlatılamadı (PipeWire araçları gerekli)", "could not start pw-record (PipeWire tools needed)"))?;
+    let mut out = child.stdout.take().context(crate::i18n::t("pw-record çıktısı yok", "pw-record has no output"))?;
     let reader = tokio::spawn(async move {
         let mut samples = Vec::with_capacity(SAMPLE_RATE as usize * 30);
         let mut buf = vec![0u8; 1024];

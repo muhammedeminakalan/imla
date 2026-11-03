@@ -64,6 +64,6 @@ pub fn play(cfg: &Config, sound: Sound) {
                 let _ = child.wait();
             });
         }
-        Err(e) => log::warn!("ses çalınamadı: {e}"),
+        Err(e) => log::warn!("{}", crate::tf!("ses çalınamadı: {e}", "could not play a tone: {e}")),
     }
 }

@@ -3,6 +3,7 @@
 
 mod config;
 mod hud;
+mod i18n;
 mod paste;
 mod recorder;
 mod sounds;
@@ -47,39 +48,26 @@ const UNIT: &str = "app-dev.akalan.dictate.service";
 const TAP: Duration = Duration::from_millis(350);
 
 #[derive(Parser)]
-#[command(
-    version,
-    about = "Kısayola basılı tut, konuş, bırak: söylediğin yazıya dökülüp yapıştırılır.",
-    disable_help_subcommand = true,
-    disable_help_flag = true,
-    disable_version_flag = true,
-    help_template = "{about}\n\nKullanım: {usage}\n\nKomutlar:\n{subcommands}\n\nSeçenekler:\n{options}"
-)]
+#[command(version, disable_help_subcommand = true, disable_help_flag = true, disable_version_flag = true)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
-    /// Yardımı göster.
     #[arg(short, long, action = clap::ArgAction::Help, global = true)]
     help: Option<bool>,
-    /// Sürümü göster.
     #[arg(short = 'V', long, action = clap::ArgAction::Version)]
     version: Option<bool>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// API anahtarını kaydet, kısayolu ve arka plan servisini kur.
-    #[command(help_template = "{about}\n\nKullanım: {usage}\n\nSeçenekler:\n{options}")]
     Setup {
-        /// Tercih edilen kısayol (XDG biçimi), ör. "CTRL+ALT+D".
         #[arg(long)]
         shortcut: Option<String>,
-        /// Panoya yapıştırırken Ctrl+Shift+V kullan (terminal ağırlıklı çalışıyorsan).
+        #[arg(long)]
+        language: Option<String>,
         #[arg(long)]
         terminal_paste: bool,
     },
-    /// Servis çalışıyor mu, ne yapıyor.
-    #[command(help_template = "{about}\n\nKullanım: {usage}\n\nSeçenekler:\n{options}")]
     Status,
     /// Arka plan servisi (systemd çalıştırır).
     #[command(hide = true)]
@@ -98,15 +86,16 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("dictate=info,zbus=error")).init();
-    match Cli::parse().cmd {
-        Cmd::Setup { shortcut, terminal_paste } => setup(shortcut, terminal_paste).await,
+    match parse_cli().cmd {
+        Cmd::Setup { shortcut, language, terminal_paste } => setup(shortcut, language, terminal_paste).await,
         Cmd::Daemon => daemon().await,
         Cmd::Toggle => {
-            println!("{}", control("toggle").await?);
+            println!("{}", reply_text(&control("toggle").await?));
             Ok(())
         }
         Cmd::Status => {
-            println!("{}", control("status").await.unwrap_or_else(|_| "çalışmıyor".into()));
+            let reply = control("status").await.unwrap_or_else(|_| "stopped".into());
+            println!("{}", reply_text(&reply));
             Ok(())
         }
         Cmd::Transcribe { wav } => {
@@ -139,12 +128,56 @@ async fn main() -> Result<()> {
     }
 }
 
+/// The CLI with its help in the session's language (clap's derive texts are fixed at build time).
+fn parse_cli() -> Cli {
+    use clap::{CommandFactory, FromArgMatches};
+    let t = i18n::t;
+    let (usage, cmds, opts) = (t("Kullanım", "Usage"), t("Komutlar", "Commands"), t("Seçenekler", "Options"));
+    let top = format!("{{about}}\n\n{usage}: {{usage}}\n\n{cmds}:\n{{subcommands}}\n\n{opts}:\n{{options}}");
+    let sub = format!("{{about}}\n\n{usage}: {{usage}}\n\n{opts}:\n{{options}}");
+    let cmd = Cli::command()
+        .about(t(
+            "Kısayola basılı tut, konuş, bırak: söylediğin yazıya dökülüp yapıştırılır.",
+            "Hold the shortcut, speak, release: what you said is transcribed and pasted.",
+        ))
+        .help_template(top)
+        .override_usage(t("dictate <KOMUT>", "dictate <COMMAND>"))
+        .mut_arg("help", |a| a.help(t("Yardımı göster", "Show help")))
+        .mut_arg("version", |a| a.help(t("Sürümü göster", "Show version")))
+        .mut_subcommand("setup", |c| {
+            c.about(t("API anahtarını kaydet, kısayolu ve arka plan servisini kur", "Save the API key, set up the shortcut and the background service"))
+                .help_template(sub.clone())
+                .override_usage(t("dictate setup [SEÇENEKLER]", "dictate setup [OPTIONS]"))
+                .mut_arg("shortcut", |a| a.help(t("Tercih edilen kısayol (XDG biçimi), ör. \"CTRL+ALT+D\"", "Preferred shortcut (XDG syntax), e.g. \"CTRL+ALT+D\"")).value_name(t("TUŞLAR", "KEYS")))
+                .mut_arg("language", |a| a.help(t("Konuşma dili: auto (kendisi anlar) ya da ISO kodu, ör. tr, en, de", "Speech language: auto (detected) or an ISO code, e.g. tr, en, de")).value_name(t("DİL", "LANG")))
+                .mut_arg("terminal_paste", |a| a.help(t("Ctrl+Shift+V ile yapıştır (terminal ağırlıklı çalışıyorsan)", "Paste with Ctrl+Shift+V (if you mostly work in terminals)")))
+        })
+        .mut_subcommand("status", |c| {
+            c.about(t("Servis çalışıyor mu, ne yapıyor", "Whether the service runs and what it is doing"))
+                .help_template(sub.clone())
+                .override_usage("dictate status")
+        });
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
+}
+
+fn reply_text(key: &str) -> &'static str {
+    match key {
+        "ok" => i18n::t("tamam", "ok"),
+        "listening" => i18n::t("dinliyor", "listening"),
+        "transcribing" => i18n::t("yazıya döküyor", "transcribing"),
+        "ready" => i18n::t("hazır", "ready"),
+        "stopped" => i18n::t("çalışmıyor", "not running"),
+        _ => i18n::t("bilinmeyen yanıt", "unknown reply"),
+    }
+}
+
 fn socket_path() -> PathBuf {
     dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("dictate.sock")
 }
 
 async fn control(cmd: &str) -> Result<String> {
-    let mut s = UnixStream::connect(socket_path()).await.context("servis çalışmıyor")?;
+    let mut s = UnixStream::connect(socket_path()).await.context(i18n::t("servis çalışmıyor", "the service is not running"))?;
     s.write_all(format!("{cmd}\n").as_bytes()).await?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).await?;
@@ -172,13 +205,13 @@ type SharedPaster = Arc<tokio::sync::Mutex<Option<Paster>>>;
 async fn daemon() -> Result<()> {
     let cfg = Arc::new(Config::load()?);
     if cfg.api_key.is_empty() {
-        bail!("ayar yok: önce `dictate setup` çalıştır");
+        bail!("{}", i18n::t("ayar yok: önce `dictate setup` çalıştır", "not set up: run `dictate setup` first"));
     }
     let conn = ashpd::zbus::Connection::session().await?;
     // without the app id KDE can't remember the shortcut; fail so systemd retries
     ashpd::register_host_app_with_connection(conn.clone(), AppID::try_from(APP_ID)?)
         .await
-        .context("portal kaydı yapılamadı")?;
+        .context(i18n::t("portal kaydı yapılamadı", "could not register with the portal"))?;
     let hud = hud::spawn();
 
     // shortcut and control socket first: they must work while KDE's keyboard dialog is open
@@ -187,16 +220,16 @@ async fn daemon() -> Result<()> {
     let bound = shortcuts
         .bind_shortcuts(
             &session,
-            &[NewShortcut::new(SHORTCUT_ID, "Sesle yazdır (basılı tut, konuş, bırak)")
+            &[NewShortcut::new(SHORTCUT_ID, i18n::t("Sesle yazdır (basılı tut, konuş, bırak)", "Dictate (hold, speak, release)"))
                 .preferred_trigger(cfg.shortcut.as_str())],
             None,
             Default::default(),
         )
         .await?
         .response()
-        .context("kısayol kaydedilemedi")?;
+        .context(i18n::t("kısayol kaydedilemedi", "could not bind the shortcut"))?;
     for s in bound.shortcuts() {
-        log::info!("kısayol: {} = {}", s.id(), s.trigger_description());
+        log::info!("{}", tf!("kısayol: {} = {}", "shortcut: {} = {}", s.id(), s.trigger_description()));
     }
     let mut pressed = shortcuts.receive_activated().await?;
     let mut released = shortcuts.receive_deactivated().await?;
@@ -214,7 +247,7 @@ async fn daemon() -> Result<()> {
             if slot.is_none() {
                 match Paster::connect(conn).await {
                     Ok(p) => *slot = Some(p),
-                    Err(e) => log::warn!("klavye izni yok, ilk yapıştırmada yeniden sorulacak: {e:#}"),
+                    Err(e) => log::warn!("{}", tf!("klavye izni yok, ilk yapıştırmada yeniden sorulacak: {e:#}", "no keyboard access, asking again at the first paste: {e:#}")),
                 }
             }
         });
@@ -222,7 +255,7 @@ async fn daemon() -> Result<()> {
 
     let mut active: Option<Active> = None;
     let mut deadline = tokio::time::Instant::now();
-    log::info!("hazır");
+    log::info!("{}", i18n::t("hazır", "ready"));
     loop {
         let event = tokio::select! {
             Some(a) = pressed.next() => if a.shortcut_id() == SHORTCUT_ID { Event::Press } else { continue },
@@ -276,7 +309,7 @@ async fn daemon() -> Result<()> {
                             let _ = hud.send(HudMsg::Error);
                         }
                         Err(_) => {
-                            log::error!("zaman aşımı: yazıya dökme ya da yapıştırma bitmedi");
+                            log::error!("{}", i18n::t("zaman aşımı: yazıya dökme ya da yapıştırma bitmedi", "timed out: transcription or paste did not finish"));
                             let _ = hud.send(HudMsg::Error);
                         }
                     }
@@ -305,11 +338,11 @@ async fn finish(
     let wav = recorder::wav(&samples);
     save_last_clip(&wav);
     let text = transcribe::transcribe(cfg, &wav).await?;
+    let (secs, took, chars) =
+        (samples.len() as f32 / recorder::SAMPLE_RATE as f32, started.elapsed().as_secs_f32(), text.chars().count());
     log::info!(
-        "{:.1} sn ses, {:.1} sn'de çözüldü: {} karakter",
-        samples.len() as f32 / recorder::SAMPLE_RATE as f32,
-        started.elapsed().as_secs_f32(),
-        text.chars().count()
+        "{}",
+        tf!("{secs:.1} sn ses, {took:.1} sn'de çözüldü: {chars} karakter", "{secs:.1} s of audio, transcribed in {took:.1} s: {chars} characters")
     );
     let _ = hud.send(HudMsg::Hide);
     if text.is_empty() {
@@ -322,17 +355,17 @@ async fn finish(
                 Ok(p) => *slot = Some(p),
                 Err(e) => {
                     paste::set_clipboard(text).await?;
-                    bail!("klavye izni yok, metin panoda bırakıldı: {e:#}");
+                    bail!("{}", tf!("klavye izni yok, metin panoda bırakıldı: {e:#}", "no keyboard access, the text is on the clipboard: {e:#}"));
                 }
             }
         }
         match slot.as_ref().unwrap().paste(cfg, &text).await {
             Ok(()) => return Ok(()),
             Err(e) if attempt == 0 => {
-                log::warn!("yapıştırma oturumu kopmuş, yeniden açılıyor: {e:#}");
+                log::warn!("{}", tf!("yapıştırma oturumu kopmuş, yeniden açılıyor: {e:#}", "paste session lost, reopening: {e:#}"));
                 *slot = None;
             }
-            Err(e) => return Err(e.context("yapıştırılamadı, metin panoda")),
+            Err(e) => return Err(e.context(i18n::t("yapıştırılamadı, metin panoda", "could not paste, the text is on the clipboard"))),
         }
     }
     Ok(())
@@ -351,7 +384,7 @@ fn save_last_clip(wav: &[u8]) {
         .open(dir.join("last.wav"))
         .and_then(|mut f| f.write_all(wav));
     if let Err(e) = written {
-        log::warn!("son kayıt saklanamadı: {e}");
+        log::warn!("{}", tf!("son kayıt saklanamadı: {e}", "could not keep the last clip: {e}"));
     }
 }
 
@@ -374,14 +407,15 @@ fn spawn_control_socket(
                     return;
                 }
                 let reply = match line.trim() {
+                    // replies are keys; the CLI words them in its own language
                     "toggle" => {
                         let _ = tx.send(Event::Toggle);
-                        "tamam"
+                        "ok"
                     }
-                    "status" if listening.load(Ordering::SeqCst) => "dinliyor",
-                    "status" if busy.load(Ordering::SeqCst) > 0 => "yazıya döküyor",
-                    "status" => "hazır",
-                    _ => "bilinmeyen komut",
+                    "status" if listening.load(Ordering::SeqCst) => "listening",
+                    "status" if busy.load(Ordering::SeqCst) > 0 => "transcribing",
+                    "status" => "ready",
+                    _ => "unknown",
                 };
                 let _ = w.write_all(format!("{reply}\n").as_bytes()).await;
             });
@@ -395,13 +429,13 @@ fn spawn_control_socket(
 
 
 
-async fn setup(shortcut: Option<String>, terminal_paste: bool) -> Result<()> {
+async fn setup(shortcut: Option<String>, language: Option<String>, terminal_paste: bool) -> Result<()> {
     let mut cfg = Config::load()?;
-    println!("dictate kurulumu\n");
+    println!("{}\n", i18n::t("dictate kurulumu", "dictate setup"));
     let key = rpassword::prompt_password(if cfg.api_key.is_empty() {
-        "OpenRouter API anahtarı: "
+        i18n::t("OpenRouter API anahtarı: ", "OpenRouter API key: ")
     } else {
-        "OpenRouter API anahtarı (aynısı kalsın diye boş bırak): "
+        i18n::t("OpenRouter API anahtarı (aynısı kalsın diye boş bırak): ", "OpenRouter API key (leave empty to keep it): ")
     })?;
     if !key.trim().is_empty() {
         cfg.api_key = key.trim().to_string();
@@ -410,28 +444,41 @@ async fn setup(shortcut: Option<String>, terminal_paste: bool) -> Result<()> {
     if let Some(s) = shortcut {
         cfg.shortcut = s;
     }
+    if let Some(l) = language {
+        cfg.language = l.trim().to_lowercase();
+    }
     if terminal_paste {
         cfg.paste_keys = "ctrl+shift+v".into();
     }
     if cfg.terms.is_empty() {
-        print!("Doğru yazılmasını istediğin adlar/terimler (virgülle, boş geçebilirsin): ");
+        print!("{}", i18n::t(
+            "Doğru yazılmasını istediğin adlar/terimler (virgülle, boş geçebilirsin): ",
+            "Names/terms to spell exactly (comma-separated, may be empty): "
+        ));
         std::io::stdout().flush()?;
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line)?;
         cfg.terms = line.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     }
     cfg.save()?;
-    println!("Ayarlar kaydedildi: {}", config::path().display());
+    println!("{}", tf!("Ayarlar kaydedildi: {}", "Settings saved: {}", config::path().display()));
 
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", UNIT])?;
     systemctl(&["restart", UNIT])?;
+    let sc = &cfg.shortcut;
     println!(
-        "\nServis başladı. KDE şimdi iki pencere açabilir:\n  1. Kısayolu onayla (önerilen: {}; istersen değiştir).\n  \
-         2. Klavye denetimine izin ver (yapıştırmak için; bir kez sorulur).\n\n\
-         Kullanım: kısayola basılı tut, konuş, bırak. Kısa bas: konuşmayı bitirince yine kısa bas.\n\
-         Durum: `dictate status` · Kayıtlar: `journalctl --user -u app-dev.akalan.dictate -f`",
-        cfg.shortcut
+        "{}",
+        tf!(
+            "\nServis başladı. KDE şimdi iki pencere açabilir:\n  1. Kısayolu onayla (önerilen: {sc}; istersen değiştir).\n  \
+             2. Klavye denetimine izin ver (yapıştırmak için; bir kez sorulur).\n\n\
+             Kullanım: kısayola basılı tut, konuş, bırak. Kısa bas: konuşmayı bitirince yine kısa bas.\n\
+             Durum: `dictate status` · Kayıtlar: `journalctl --user -u app-dev.akalan.dictate -f`",
+            "\nThe service started. KDE may now open two dialogs:\n  1. Confirm the shortcut (suggested: {sc}; change it if you like).\n  \
+             2. Allow keyboard control (for pasting; asked once).\n\n\
+             Use: hold the shortcut, speak, release. Tap: tap again when you are done speaking.\n\
+             Status: `dictate status` · Logs: `journalctl --user -u app-dev.akalan.dictate -f`"
+        )
     );
     Ok(())
 }
@@ -443,18 +490,18 @@ async fn check_key(key: &str) -> Result<()> {
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .context("OpenRouter'a bağlanılamadı")?;
+        .context(i18n::t("OpenRouter'a bağlanılamadı", "could not reach OpenRouter"))?;
     if !r.status().is_success() {
-        bail!("anahtar geçersiz (OpenRouter {})", r.status());
+        bail!("{}", tf!("anahtar geçersiz (OpenRouter {})", "invalid key (OpenRouter {})", r.status()));
     }
-    println!("Anahtar doğrulandı.");
+    println!("{}", i18n::t("Anahtar doğrulandı.", "Key verified."));
     Ok(())
 }
 
 fn systemctl(args: &[&str]) -> Result<()> {
     let ok = Command::new("systemctl").arg("--user").args(args).status()?.success();
     if !ok {
-        bail!("systemctl --user {} başarısız", args.join(" "));
+        bail!("{}", tf!("systemctl --user {} başarısız", "systemctl --user {} failed", args.join(" ")));
     }
     Ok(())
 }
