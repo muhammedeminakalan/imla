@@ -47,15 +47,29 @@ const UNIT: &str = "app-dev.akalan.dictate.service";
 const TAP: Duration = Duration::from_millis(350);
 
 #[derive(Parser)]
-#[command(version, about = "Kısayola basılı tut, konuş, bırak: söylediğin yazıya dökülüp yapıştırılır.")]
+#[command(
+    version,
+    about = "Kısayola basılı tut, konuş, bırak: söylediğin yazıya dökülüp yapıştırılır.",
+    disable_help_subcommand = true,
+    disable_help_flag = true,
+    disable_version_flag = true,
+    help_template = "{about}\n\nKullanım: {usage}\n\nKomutlar:\n{subcommands}\n\nSeçenekler:\n{options}"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// Yardımı göster.
+    #[arg(short, long, action = clap::ArgAction::Help, global = true)]
+    help: Option<bool>,
+    /// Sürümü göster.
+    #[arg(short = 'V', long, action = clap::ArgAction::Version)]
+    version: Option<bool>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
     /// API anahtarını kaydet, kısayolu ve arka plan servisini kur.
+    #[command(help_template = "{about}\n\nKullanım: {usage}\n\nSeçenekler:\n{options}")]
     Setup {
         /// Tercih edilen kısayol (XDG biçimi), ör. "CTRL+ALT+D".
         #[arg(long)]
@@ -64,16 +78,18 @@ enum Cmd {
         #[arg(long)]
         terminal_paste: bool,
     },
-    /// Arka plan servisi (systemd çalıştırır).
-    Daemon,
-    /// Kaydı başlat ya da bitir (kısayolsuz kullanım, ör. başka bir tuşa bağlamak için).
-    Toggle,
     /// Servis çalışıyor mu, ne yapıyor.
+    #[command(help_template = "{about}\n\nKullanım: {usage}\n\nSeçenekler:\n{options}")]
     Status,
-    /// Bir WAV dosyasını yazıya dök (deneme için).
+    /// Arka plan servisi (systemd çalıştırır).
+    #[command(hide = true)]
+    Daemon,
+    /// Kaydı başlat ya da bitir (kısayolsuz).
+    #[command(hide = true)]
+    Toggle,
+    /// Bir WAV dosyasını yazıya dök (deneme).
+    #[command(hide = true)]
     Transcribe { wav: PathBuf },
-    /// Servisi durdur, kaldır (ayarlar kalır).
-    Uninstall,
     /// Göstergeyi birkaç saniye sahte sesle göster (görünüm denemesi).
     #[command(hide = true)]
     HudDemo,
@@ -98,7 +114,6 @@ async fn main() -> Result<()> {
             println!("{}", transcribe::transcribe(&cfg, &fs::read(&wav)?).await?);
             Ok(())
         }
-        Cmd::Uninstall => uninstall(),
         Cmd::HudDemo => {
             let hud = hud::spawn();
             // listen -> transcribe -> done
@@ -377,17 +392,8 @@ fn spawn_control_socket(
 
 // ---------------------------------------------------------------- setup
 
-fn bin_path() -> PathBuf {
-    dirs::executable_dir().unwrap_or_else(|| dirs::home_dir().unwrap().join(".local/bin")).join("dictate")
-}
 
-fn unit_path() -> PathBuf {
-    dirs::config_dir().unwrap().join(format!("systemd/user/{UNIT}"))
-}
 
-fn desktop_path() -> PathBuf {
-    dirs::data_dir().unwrap().join(format!("applications/{APP_ID}.desktop"))
-}
 
 async fn setup(shortcut: Option<String>, terminal_paste: bool) -> Result<()> {
     let mut cfg = Config::load()?;
@@ -417,11 +423,6 @@ async fn setup(shortcut: Option<String>, terminal_paste: bool) -> Result<()> {
     cfg.save()?;
     println!("Ayarlar kaydedildi: {}", config::path().display());
 
-    if packaged() {
-        remove_home_install(); // a copy from before the package would shadow it
-    } else {
-        install_files()?;
-    }
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", UNIT])?;
     systemctl(&["restart", UNIT])?;
@@ -450,77 +451,10 @@ async fn check_key(key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Installed by the Arch package: binary in /usr/bin, unit and desktop entry under /usr.
-fn packaged() -> bool {
-    std::env::current_exe().map(|p| p.starts_with("/usr/")).unwrap_or(false)
-}
-
-/// Removes the per-user copy `setup` made before the package existed.
-fn remove_home_install() {
-    let _ = systemctl(&["disable", "--now", UNIT]);
-    for p in [unit_path(), desktop_path(), bin_path()] {
-        if p.exists() && fs::remove_file(&p).is_ok() {
-            println!("Eski kurulum kaldırıldı: {}", p.display());
-        }
-    }
-}
-
-fn install_files() -> Result<()> {
-    let bin = bin_path();
-    let me = std::env::current_exe()?;
-    if me.canonicalize().ok() != bin.canonicalize().ok() {
-        fs::create_dir_all(bin.parent().unwrap())?;
-        let tmp = bin.with_extension("new");
-        fs::copy(&me, &tmp)?;
-        fs::rename(&tmp, &bin)?;
-        println!("Kuruldu: {}", bin.display());
-    }
-    let desktop = desktop_path();
-    fs::create_dir_all(desktop.parent().unwrap())?;
-    fs::write(
-        &desktop,
-        format!(
-            "[Desktop Entry]\nType=Application\nName=dictate\nComment=Sesle yazdırma\n\
-             Exec={} daemon\nIcon=audio-input-microphone\nNoDisplay=true\nTerminal=false\n",
-            bin.display()
-        ),
-    )?;
-    let unit = unit_path();
-    fs::create_dir_all(unit.parent().unwrap())?;
-    fs::write(
-        &unit,
-        format!(
-            "[Unit]\nDescription=dictate: sesle yazdırma\nPartOf=graphical-session.target\n\
-             After=graphical-session.target\nStartLimitIntervalSec=0\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\
-             RestartSec=3\n\n[Install]\nWantedBy=graphical-session.target\n",
-            bin.display()
-        ),
-    )?;
-    Ok(())
-}
-
 fn systemctl(args: &[&str]) -> Result<()> {
     let ok = Command::new("systemctl").arg("--user").args(args).status()?.success();
     if !ok {
         bail!("systemctl --user {} başarısız", args.join(" "));
     }
-    Ok(())
-}
-
-fn uninstall() -> Result<()> {
-    let _ = systemctl(&["disable", "--now", UNIT]);
-    if packaged() {
-        println!("Servis kapatıldı. Programı kaldırmak için: sudo pacman -R dictate");
-        println!("Ayarlar duruyor: {}", config::path().display());
-        return Ok(());
-    }
-    for p in [unit_path(), desktop_path(), bin_path()] {
-        if p.exists() {
-            fs::remove_file(&p)?;
-            println!("Silindi: {}", p.display());
-        }
-    }
-    let _ = systemctl(&["daemon-reload"]);
-    println!("Ayarlar duruyor: {}", config::path().display());
     Ok(())
 }

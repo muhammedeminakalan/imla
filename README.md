@@ -39,24 +39,15 @@ dictate setup                                 # once per user: key, terms; enabl
 ```
 
 The package ships `/usr/bin/dictate`, the user unit `app-dev.akalan.dictate.service` and the
-`.desktop` entry. Run from `/usr/bin`, `setup` only enables the packaged unit and removes a copy an
-earlier non-package `setup` left in `~/.local/bin` / `~/.config/systemd/user`. Version: `pkgver` in
+`.desktop` entry. `setup` enables the packaged unit. Version: `pkgver` in
 the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 
-## Install and use (without the package)
+## Commands
 
-```bash
-./target/release/dictate setup   # asks the OpenRouter key, terms; installs ~/.local/bin/dictate,
-                                 # a systemd user service and the .desktop entry; starts it
-```
-
-KDE then asks to confirm the shortcut (default Ctrl+Alt+D, changeable in the dialog or later in
-System Settings → Shortcuts) and to allow keyboard control (for pasting).
-
-- `dictate status` · `dictate toggle` (start/stop without the shortcut) · `dictate transcribe x.wav`
-- Logs: `journalctl --user -u app-dev.akalan.dictate -f` (unit `app-dev.akalan.dictate.service`; the portal also reads the app id from it)
-- `dictate uninstall` removes the service, binary and desktop entry; the config stays.
-- `dictate hud-demo` (hidden) shows the HUD for a few seconds.
+- `dictate setup [--shortcut KEYS] [--terminal-paste]`: key, terms; enables and restarts the service
+- `dictate status`: ready / listening / transcribing, or not running
+- Hidden: `daemon` (run by systemd), `toggle` (start/stop without the shortcut), `transcribe x.wav`, `hud-demo`
+- Logs: `journalctl --user -u app-dev.akalan.dictate -f` · Remove: `sudo pacman -R dictate`
 
 ## Config (`~/.config/dictate/config.toml`, 0600)
 

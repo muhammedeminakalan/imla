@@ -2,7 +2,7 @@
 # Packages the binary built in this repository (`make dist`, Rust in Docker); nothing is
 # compiled here, so makepkg needs no Rust toolchain.
 pkgname=dictate
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='Push-to-talk dictation for KDE Plasma (Wayland): hold a shortcut, speak, the text is pasted'
 arch=('x86_64')
