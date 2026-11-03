@@ -19,6 +19,9 @@ pub struct Config {
     pub api_key: String,
     /// OpenRouter model that takes audio input.
     pub model: String,
+    /// Pure speech-to-text model (OpenRouter /audio/transcriptions) used when the chat model
+    /// answers or refuses instead of transcribing; empty disables the retry.
+    pub fallback_model: String,
     /// ISO-639-1 language of the speech.
     pub language: String,
     /// Words the model should spell exactly (names, jargon); sent as hints with every request.
@@ -38,6 +41,7 @@ impl Default for Config {
         Self {
             api_key: String::new(),
             model: "openai/gpt-audio-mini".into(),
+            fallback_model: "openai/gpt-transcribe".into(),
             language: "tr".into(),
             terms: Vec::new(),
             shortcut: "CTRL+ALT+D".into(),
