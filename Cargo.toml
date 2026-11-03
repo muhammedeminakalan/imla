@@ -1,0 +1,24 @@
+[package]
+name = "dictate"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+ashpd = { version = "0.13.13", features = ["global_shortcuts", "remote_desktop", "screencast"] }
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "7.0.0"
+env_logger = "0.11.11"
+futures-util = "0.3.34"
+log = "0.4.35"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+rpassword = "7.5.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["calloop"] }
+tiny-skia = "0.12.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util", "signal"] }
+toml = "1.1.8"
+wayland-client = "0.31.15"
+wl-clipboard-rs = "0.9.5"

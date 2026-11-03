@@ -1,0 +1,52 @@
+# dictate
+
+Hold a shortcut, speak, release: the speech is transcribed by an audio model on OpenRouter
+(default `openai/gpt-audio-mini`) and pasted into the focused window. No window, only a small HUD
+pill at the top of the screen while it listens (red dot + level meter) and transcribes (dots).
+Built for KDE Plasma on Wayland. The working logic follows [Hex](https://github.com/anomalyco/hex)
+(MIT); no Hex code is copied.
+
+## How it works
+
+- **Shortcut:** XDG GlobalShortcuts portal (`Activated`/`Deactivated` = press/release). The
+  process registers as `dev.akalan.dictate` (host app registry + `.desktop` entry) so KDE can
+  bind and remember it. Hold = record while held; a short tap latches recording until the next tap.
+- **Audio:** `pw-record` (PipeWire), 16 kHz mono s16, live RMS for the meter; silent or <0.33 s
+  clips are dropped; recording stops itself after `max_seconds`.
+- **Transcription:** OpenRouter `chat/completions` with an `input_audio` WAV and a verbatim prompt;
+  `terms` from the config are added as spelling hints (fixes names, e.g. "Gülendam Afra").
+- **Paste:** text goes to the clipboard (wl-clipboard-rs, data-control), then Ctrl+V (or
+  Ctrl+Shift+V) is pressed through the RemoteDesktop portal (keyboard only; KDE asks once, the
+  grant is kept with a restore token in `~/.local/state/dictate/`). The previous clipboard text is
+  restored afterwards. Without the portal grant the text is only left on the clipboard.
+- **HUD:** wlr layer-shell overlay drawn with tiny-skia on its own thread; click-through.
+
+## Build (no Rust toolchain on the machine; Docker)
+
+```bash
+./build.sh                 # cargo build --release in rust:1-slim-bookworm
+./build.sh test --release  # unit tests
+```
+
+The binary only links glibc (`target/release/dictate`).
+
+## Install and use
+
+```bash
+./target/release/dictate setup   # asks the OpenRouter key, terms; installs ~/.local/bin/dictate,
+                                 # a systemd user service and the .desktop entry; starts it
+```
+
+KDE then asks to confirm the shortcut (default Ctrl+Alt+D, changeable in the dialog or later in
+System Settings → Shortcuts) and to allow keyboard control (for pasting).
+
+- `dictate status` · `dictate toggle` (start/stop without the shortcut) · `dictate transcribe x.wav`
+- Logs: `journalctl --user -u dictate -f`
+- `dictate uninstall` removes the service, binary and desktop entry; the config stays.
+- `dictate hud-demo` (hidden) shows the HUD for a few seconds.
+
+## Config (`~/.config/dictate/config.toml`, 0600)
+
+`api_key`, `model`, `language` (`tr`), `terms` (list), `shortcut`, `paste_keys`
+(`ctrl+v` / `ctrl+shift+v`), `restore_clipboard`, `max_seconds`. `OPENROUTER_API_KEY` in the
+environment is used when `api_key` is empty.
