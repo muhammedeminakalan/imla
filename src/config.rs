@@ -1,6 +1,12 @@
-//! User settings in ~/.config/imla/config.toml (owner-only: it holds the API key).
+//! User settings in ~/.config/imla/config.toml (owner-only: it holds API keys).
+//!
+//! Speech goes to the active *provider* profile. Three kinds cover the market and local setups:
+//! an audio-capable chat model (OpenAI-compatible `chat/completions` with `input_audio`), an
+//! OpenAI-compatible `audio/transcriptions` endpoint (cloud or a local server), or any command
+//! that reads a WAV file and prints the text.
 
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
@@ -12,13 +18,100 @@ use serde::{Deserialize, Serialize};
 
 pub const APP_ID: &str = "dev.akalan.imla";
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Kind {
+    /// OpenAI-compatible `chat/completions` with an `input_audio` part.
+    ChatAudio,
+    /// OpenAI-compatible `audio/transcriptions` (multipart upload).
+    Transcriptions,
+    /// A local command; `{wav}` is replaced by the clip's path, `{lang}` by the language.
+    Command,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Provider {
+    pub kind: Kind,
+    /// API root, e.g. `https://openrouter.ai/api/v1`.
+    pub base_url: String,
+    /// Empty for keyless servers; falls back to the `key_env` environment variable.
+    pub api_key: String,
+    pub key_env: String,
+    pub model: String,
+    /// Only for `kind = "command"`.
+    pub command: String,
+}
+
+impl Default for Provider {
+    fn default() -> Self {
+        Self {
+            kind: Kind::Transcriptions,
+            base_url: String::new(),
+            api_key: String::new(),
+            key_env: String::new(),
+            model: String::new(),
+            command: String::new(),
+        }
+    }
+}
+
+impl Provider {
+    pub fn needs_key(&self) -> bool {
+        self.kind != Kind::Command && !self.key_env.is_empty()
+    }
+
+    /// The key from the config, else from its environment variable.
+    pub fn key(&self) -> String {
+        if self.api_key.is_empty() && !self.key_env.is_empty() {
+            std::env::var(&self.key_env).unwrap_or_default()
+        } else {
+            self.api_key.clone()
+        }
+    }
+}
+
+/// Ready-made profiles: name, profile, one-line description.
+pub fn presets() -> Vec<(&'static str, Provider, &'static str)> {
+    let p = |kind, base_url: &str, key_env: &str, model: &str| Provider {
+        kind,
+        base_url: base_url.into(),
+        key_env: key_env.into(),
+        model: model.into(),
+        ..Provider::default()
+    };
+    vec![
+        ("openrouter", p(Kind::ChatAudio, "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-audio-mini"),
+         "OpenRouter: many audio and speech models with one key"),
+        ("openai", p(Kind::Transcriptions, "https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini-transcribe"),
+         "OpenAI speech-to-text"),
+        ("groq", p(Kind::Transcriptions, "https://api.groq.com/openai/v1", "GROQ_API_KEY", "whisper-large-v3-turbo"),
+         "Groq: very fast hosted Whisper"),
+        ("gemini", p(Kind::ChatAudio, "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.5-flash"),
+         "Google Gemini (OpenAI-compatible endpoint)"),
+        ("mistral", p(Kind::Transcriptions, "https://api.mistral.ai/v1", "MISTRAL_API_KEY", "voxtral-mini-latest"),
+         "Mistral Voxtral"),
+        ("local-server", p(Kind::Transcriptions, "http://127.0.0.1:8000/v1", "", "whisper-1"),
+         "A local OpenAI-compatible server (whisper.cpp server, Speaches, LocalAI…), no key"),
+        ("local-command", Provider {
+            kind: Kind::Command,
+            command: "whisper-cli -m ~/models/ggml-large-v3-turbo.bin -l {lang} -nt -np -f {wav}".into(),
+            ..Provider::default()
+        }, "Any local program: gets the WAV path, prints the text"),
+    ]
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
-    /// OpenRouter API key.
-    pub api_key: String,
-    /// OpenRouter model that takes audio input.
-    pub model: String,
+    /// Name of the active profile in `providers`.
+    pub provider: String,
+    pub providers: BTreeMap<String, Provider>,
+    /// Settings before providers existed (OpenRouter only); moved into `providers.openrouter`.
+    #[serde(skip_serializing)]
+    pub(crate) api_key: String,
+    #[serde(skip_serializing)]
+    pub(crate) model: String,
     /// ISO-639-1 language of the speech, or "auto": written in whatever language is spoken.
     pub language: String,
     /// Words the model should spell exactly (names, jargon); sent as hints with every request.
@@ -39,9 +132,14 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let mut providers = BTreeMap::new();
+        let (name, openrouter, _) = presets().remove(0);
+        providers.insert(name.to_string(), openrouter);
         Self {
+            provider: name.into(),
+            providers,
             api_key: String::new(),
-            model: "openai/gpt-audio-mini".into(),
+            model: String::new(),
             language: "auto".into(),
             terms: Vec::new(),
             shortcut: "CTRL+ALT+D".into(),
@@ -92,10 +190,33 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(e) => return Err(e).with_context(|| crate::tf!("{} okunamadı", "could not read {}", p.display())),
         };
-        if cfg.api_key.is_empty() {
-            cfg.api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
-        }
+        cfg.migrate_legacy();
         Ok(cfg)
+    }
+
+    fn migrate_legacy(&mut self) {
+        if self.api_key.is_empty() && self.model.is_empty() {
+            return;
+        }
+        let entry = self.providers.entry("openrouter".into()).or_insert_with(|| presets().remove(0).1);
+        if !self.api_key.is_empty() {
+            entry.api_key = std::mem::take(&mut self.api_key);
+        }
+        if !self.model.is_empty() {
+            entry.model = std::mem::take(&mut self.model);
+        }
+    }
+
+    /// The active profile.
+    pub fn active(&self) -> Result<&Provider> {
+        self.providers.get(&self.provider).with_context(|| {
+            crate::tf!("'{}' adlı sağlayıcı yok: `imla setup`", "no provider named '{}': run `imla setup`", self.provider)
+        })
+    }
+
+    pub fn active_mut(&mut self) -> Result<&mut Provider> {
+        let name = self.provider.clone();
+        self.providers.get_mut(&name).with_context(|| crate::tf!("'{}' adlı sağlayıcı yok", "no provider named '{}'", name))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -108,5 +229,32 @@ impl Config {
         f.write_all(toml::to_string_pretty(self)?.as_bytes())?;
         fs::set_permissions(&p, fs::Permissions::from_mode(0o600))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_config_moves_into_the_openrouter_profile() {
+        let mut cfg: Config = toml::from_str("api_key = \"sk-test\"\nmodel = \"openai/gpt-audio\"\n").unwrap();
+        cfg.migrate_legacy();
+        let p = cfg.active().unwrap();
+        assert_eq!(cfg.provider, "openrouter");
+        assert_eq!((p.api_key.as_str(), p.model.as_str()), ("sk-test", "openai/gpt-audio"));
+        assert!(!toml::to_string(&cfg).unwrap().contains("\napi_key = \"sk-test\"\nmodel"));
+    }
+
+    #[test]
+    fn profiles_round_trip() {
+        let mut cfg = Config::default();
+        for (name, p, _) in presets() {
+            cfg.providers.insert(name.into(), p);
+        }
+        cfg.provider = "local-command".into();
+        let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
+        assert_eq!(back.active().unwrap().kind, Kind::Command);
+        assert_eq!(back.providers.len(), presets().len());
     }
 }

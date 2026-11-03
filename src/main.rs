@@ -36,7 +36,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{APP_ID, Config},
+    config::{APP_ID, Config, Kind, Provider},
     hud::HudMsg,
     paste::Paster,
 };
@@ -63,6 +63,10 @@ struct Cli {
 enum Cmd {
     Setup {
         #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
         shortcut: Option<String>,
         #[arg(long)]
         language: Option<String>,
@@ -70,6 +74,9 @@ enum Cmd {
         terminal_paste: bool,
     },
     Status,
+    Providers,
+    Use { name: String },
+    Model { model: Option<String> },
     /// Arka plan servisi (systemd çalıştırır).
     #[command(hide = true)]
     Daemon,
@@ -92,7 +99,12 @@ async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("imla=info,zbus=error")).init();
     config::migrate_old_name();
     match parse_cli().cmd {
-        Cmd::Setup { shortcut, language, terminal_paste } => setup(shortcut, language, terminal_paste).await,
+        Cmd::Setup { provider, model, shortcut, language, terminal_paste } => {
+            setup(shortcut, language, terminal_paste, provider, model).await
+        }
+        Cmd::Providers => providers(),
+        Cmd::Use { name } => use_provider(&name),
+        Cmd::Model { model } => set_model(model),
         Cmd::Daemon => daemon().await,
         Cmd::Toggle => {
             println!("{}", reply_text(&control("toggle").await?));
@@ -158,9 +170,28 @@ fn parse_cli() -> Cli {
             c.about(t("API anahtarını kaydet, kısayolu ve arka plan servisini kur", "Save the API key, set up the shortcut and the background service"))
                 .help_template(sub.clone())
                 .override_usage(t("imla setup [SEÇENEKLER]", "imla setup [OPTIONS]"))
+                .mut_arg("provider", |a| a.help(t("Sağlayıcı profili: openrouter, openai, groq, gemini, mistral, local-server, local-command ya da kendi adın", "Provider profile: openrouter, openai, groq, gemini, mistral, local-server, local-command or your own name")).value_name(t("AD", "NAME")))
+                .mut_arg("model", |a| a.help(t("Model adı (sağlayıcının kendi adlandırmasıyla)", "Model name (as the provider calls it)")).value_name("MODEL"))
                 .mut_arg("shortcut", |a| a.help(t("Tercih edilen kısayol (XDG biçimi), ör. \"CTRL+ALT+D\"", "Preferred shortcut (XDG syntax), e.g. \"CTRL+ALT+D\"")).value_name(t("TUŞLAR", "KEYS")))
                 .mut_arg("language", |a| a.help(t("Konuşma dili: auto (kendisi anlar) ya da ISO kodu, ör. tr, en, de", "Speech language: auto (detected) or an ISO code, e.g. tr, en, de")).value_name(t("DİL", "LANG")))
                 .mut_arg("terminal_paste", |a| a.help(t("Ctrl+Shift+V ile yapıştır (terminal ağırlıklı çalışıyorsan)", "Paste with Ctrl+Shift+V (if you mostly work in terminals)")))
+        })
+        .mut_subcommand("providers", |c| {
+            c.about(t("Kayıtlı sağlayıcı profillerini listele (* etkin olan)", "List provider profiles (* marks the active one)"))
+                .help_template(sub.clone())
+                .override_usage("imla providers")
+        })
+        .mut_subcommand("use", |c| {
+            c.about(t("Etkin sağlayıcıyı değiştir", "Switch the active provider"))
+                .help_template(sub.clone())
+                .override_usage(t("imla use <AD>", "imla use <NAME>"))
+                .mut_arg("name", |a| a.help(t("Profil adı", "Profile name")).value_name(t("AD", "NAME")))
+        })
+        .mut_subcommand("model", |c| {
+            c.about(t("Etkin sağlayıcının modelini göster ya da değiştir", "Show or change the active provider's model"))
+                .help_template(sub.clone())
+                .override_usage("imla model [MODEL]")
+                .mut_arg("model", |a| a.help(t("Yeni model (boşsa gösterir)", "New model (shows it when omitted)")).value_name("MODEL"))
         })
         .mut_subcommand("status", |c| {
             c.about(t("Servis çalışıyor mu, ne yapıyor", "Whether the service runs and what it is doing"))
@@ -214,7 +245,8 @@ type SharedPaster = Arc<tokio::sync::Mutex<Option<Paster>>>;
 
 async fn daemon() -> Result<()> {
     let cfg = Arc::new(Config::load()?);
-    if cfg.api_key.is_empty() {
+    let active = cfg.active()?;
+    if active.needs_key() && active.key().is_empty() {
         bail!("{}", i18n::t("ayar yok: önce `imla setup` çalıştır", "not set up: run `imla setup` first"));
     }
     let conn = ashpd::zbus::Connection::session().await?;
@@ -439,18 +471,96 @@ fn spawn_control_socket(
 
 
 
-async fn setup(shortcut: Option<String>, language: Option<String>, terminal_paste: bool) -> Result<()> {
+/// Reads one line; an empty answer keeps `default`.
+fn ask(label: &str, default: &str) -> Result<String> {
+    if default.is_empty() {
+        print!("{label}: ");
+    } else {
+        print!("{label} [{default}]: ");
+    }
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let line = line.trim();
+    Ok(if line.is_empty() { default.to_string() } else { line.to_string() })
+}
+
+fn kind_name(k: Kind) -> &'static str {
+    match k {
+        Kind::ChatAudio => "chat-audio",
+        Kind::Transcriptions => "transcriptions",
+        Kind::Command => "command",
+    }
+}
+
+/// Picks a profile: a preset or an existing one, by number or name.
+fn choose_provider(cfg: &Config) -> Result<String> {
+    let mut names: Vec<String> = config::presets().iter().map(|(n, _, _)| n.to_string()).collect();
+    for n in cfg.providers.keys() {
+        if !names.contains(n) {
+            names.push(n.clone());
+        }
+    }
+    println!("{}", i18n::t("Sağlayıcılar:", "Providers:"));
+    let presets = config::presets();
+    for (i, n) in names.iter().enumerate() {
+        let about = presets.iter().find(|(p, _, _)| p == n).map(|(_, _, d)| *d).unwrap_or("custom");
+        let mark = if *n == cfg.provider { "*" } else { " " };
+        println!(" {mark}{:>2}. {n:<14} {about}", i + 1);
+    }
+    let pick = ask(i18n::t("Seçim (numara ya da ad; yeni bir ad özel profil açar)", "Choice (number or name; a new name makes a custom profile)"), &cfg.provider)?;
+    Ok(match pick.parse::<usize>() {
+        Ok(i) if (1..=names.len()).contains(&i) => names[i - 1].clone(),
+        _ => pick,
+    })
+}
+
+async fn setup(
+    shortcut: Option<String>,
+    language: Option<String>,
+    terminal_paste: bool,
+    provider: Option<String>,
+    model: Option<String>,
+) -> Result<()> {
     let mut cfg = Config::load()?;
     println!("{}\n", i18n::t("imla kurulumu", "imla setup"));
-    let key = rpassword::prompt_password(if cfg.api_key.is_empty() {
-        i18n::t("OpenRouter API anahtarı: ", "OpenRouter API key: ")
-    } else {
-        i18n::t("OpenRouter API anahtarı (aynısı kalsın diye boş bırak): ", "OpenRouter API key (leave empty to keep it): ")
-    })?;
-    if !key.trim().is_empty() {
-        cfg.api_key = key.trim().to_string();
+    let name = match provider {
+        Some(p) => p,
+        None => choose_provider(&cfg)?,
+    };
+    let preset = config::presets().into_iter().find(|(n, _, _)| *n == name).map(|(_, p, _)| p);
+    let mut p = cfg.providers.get(&name).cloned().or(preset).unwrap_or_default();
+    if !cfg.providers.contains_key(&name) && p.base_url.is_empty() && p.kind != Kind::Command {
+        // a custom profile: the user names its kind
+        let k = ask(i18n::t("Tür: chat-audio, transcriptions ya da command", "Kind: chat-audio, transcriptions or command"), "transcriptions")?;
+        p.kind = match k.as_str() {
+            "chat-audio" => Kind::ChatAudio,
+            "command" => Kind::Command,
+            _ => Kind::Transcriptions,
+        };
     }
-    check_key(&cfg.api_key).await?;
+    if p.kind == Kind::Command {
+        p.command = ask(i18n::t("Komut ({wav} = kayıt dosyası, {lang} = dil; metni ekrana yazmalı)", "Command ({wav} = the clip, {lang} = language; must print the text)"), &p.command)?;
+    } else {
+        p.base_url = ask(i18n::t("Adres", "API address"), &p.base_url)?;
+        let has = !p.key().is_empty();
+        let label = match (has, p.key_env.is_empty()) {
+            (true, _) => i18n::t("API anahtarı (aynısı kalsın diye boş bırak)", "API key (leave empty to keep it)"),
+            (false, true) => i18n::t("API anahtarı (gerekmiyorsa boş bırak)", "API key (leave empty if none is needed)"),
+            (false, false) => i18n::t("API anahtarı", "API key"),
+        };
+        let key = rpassword::prompt_password(format!("{label}: "))?;
+        if !key.trim().is_empty() {
+            p.api_key = key.trim().to_string();
+        }
+        p.model = match model {
+            Some(m) => m,
+            None => ask(i18n::t("Model", "Model"), &p.model)?,
+        };
+        check_provider(&name, &p).await?;
+    }
+    cfg.providers.insert(name.clone(), p);
+    cfg.provider = name;
     if let Some(s) = shortcut {
         cfg.shortcut = s;
     }
@@ -461,13 +571,10 @@ async fn setup(shortcut: Option<String>, language: Option<String>, terminal_past
         cfg.paste_keys = "ctrl+shift+v".into();
     }
     if cfg.terms.is_empty() {
-        print!("{}", i18n::t(
-            "Doğru yazılmasını istediğin adlar/terimler (virgülle, boş geçebilirsin): ",
-            "Names/terms to spell exactly (comma-separated, may be empty): "
-        ));
-        std::io::stdout().flush()?;
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line)?;
+        let line = ask(i18n::t(
+            "Doğru yazılmasını istediğin adlar/terimler (virgülle, boş geçebilirsin)",
+            "Names/terms to spell exactly (comma-separated, may be empty)",
+        ), "")?;
         cfg.terms = line.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     }
     cfg.save()?;
@@ -497,19 +604,68 @@ async fn setup(shortcut: Option<String>, language: Option<String>, terminal_past
     Ok(())
 }
 
-async fn check_key(key: &str) -> Result<()> {
-    let r = reqwest::Client::new()
-        .get("https://openrouter.ai/api/v1/key")
-        .bearer_auth(key)
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-        .context(i18n::t("OpenRouter'a bağlanılamadı", "could not reach OpenRouter"))?;
-    if !r.status().is_success() {
-        bail!("{}", tf!("anahtar geçersiz (OpenRouter {})", "invalid key (OpenRouter {})", r.status()));
+/// Checks the address and key: OpenRouter's key endpoint, else the OpenAI-style model list.
+/// Only a rejected key fails; an unreachable or list-less server is a warning (local servers).
+async fn check_provider(name: &str, p: &Provider) -> Result<()> {
+    let base = p.base_url.trim_end_matches('/');
+    let url = if base.contains("openrouter.ai") { format!("{base}/key") } else { format!("{base}/models") };
+    let mut req = reqwest::Client::new().get(url).timeout(Duration::from_secs(15));
+    if !p.key().is_empty() {
+        req = req.bearer_auth(p.key());
     }
-    println!("{}", i18n::t("Anahtar doğrulandı.", "Key verified."));
+    match req.send().await {
+        Ok(r) if r.status().is_success() => println!("{}", tf!("'{name}' bağlantısı doğrulandı.", "'{name}' connection verified.")),
+        Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED || r.status() == reqwest::StatusCode::FORBIDDEN => {
+            bail!("{}", tf!("anahtar reddedildi ({})", "the key was rejected ({})", r.status()))
+        }
+        Ok(r) => println!("{}", tf!("Uyarı: {} yanıt verdi, bağlantı doğrulanamadı.", "Warning: got {}, could not verify the connection.", r.status())),
+        Err(e) => println!("{}", tf!("Uyarı: sunucuya ulaşılamadı ({e}); servis yine de kuruluyor.", "Warning: could not reach the server ({e}); setting up anyway.")),
+    }
     Ok(())
+}
+
+/// Lists the profiles, marking the active one.
+fn providers() -> Result<()> {
+    let cfg = Config::load()?;
+    for (name, p) in &cfg.providers {
+        let mark = if *name == cfg.provider { "*" } else { " " };
+        let target = if p.kind == Kind::Command { p.command.as_str() } else { p.base_url.as_str() };
+        println!("{mark} {name:<14} {:<15} {:<28} {target}", kind_name(p.kind), p.model);
+    }
+    Ok(())
+}
+
+/// Switches the active profile.
+fn use_provider(name: &str) -> Result<()> {
+    let mut cfg = Config::load()?;
+    if !cfg.providers.contains_key(name) {
+        bail!("{}", tf!("'{name}' kayıtlı değil: önce `imla setup --provider {name}`", "'{name}' is not set up: run `imla setup --provider {name}` first"));
+    }
+    cfg.provider = name.to_string();
+    cfg.save()?;
+    restart_if_running();
+    println!("{}", tf!("Etkin sağlayıcı: {name}", "Active provider: {name}"));
+    Ok(())
+}
+
+/// Shows or sets the active profile's model.
+fn set_model(model: Option<String>) -> Result<()> {
+    let mut cfg = Config::load()?;
+    let name = cfg.provider.clone();
+    match model {
+        None => println!("{name}: {}", cfg.active()?.model),
+        Some(m) => {
+            cfg.active_mut()?.model = m.clone();
+            cfg.save()?;
+            restart_if_running();
+            println!("{}", tf!("{name} modeli: {m}", "{name} model: {m}"));
+        }
+    }
+    Ok(())
+}
+
+fn restart_if_running() {
+    let _ = Command::new("systemctl").args(["--user", "try-restart", UNIT]).status();
 }
 
 fn systemctl(args: &[&str]) -> Result<()> {

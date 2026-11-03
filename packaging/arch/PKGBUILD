@@ -2,9 +2,9 @@
 # Packages the binary built in this repository (`make dist`, Rust in Docker); nothing is
 # compiled here, so makepkg needs no Rust toolchain.
 pkgname=imla
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=1
-pkgdesc='Push-to-talk dictation for KDE Plasma (Wayland): hold a shortcut, speak, the text is pasted'
+pkgdesc='Push-to-talk dictation for KDE Plasma (Wayland) with any AI provider, cloud or local'
 arch=('x86_64')
 license=('MIT')
 depends=('glibc' 'gcc-libs' 'pipewire-audio' 'xdg-desktop-portal')  # pipewire-audio: pw-record, pw-play
