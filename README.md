@@ -1,4 +1,8 @@
-# imla
+# İmlâ
+
+<p align="center"><img src="docs/hud.gif" alt="The HUD while listening, transcribing and finishing" width="504"></p>
+
+*imlâ* (Arabic/Ottoman إملاء): dictation, writing down what is spoken.
 
 Hold a shortcut, speak, release: the speech is transcribed by an audio model on OpenRouter
 (default `openai/gpt-audio-mini`) and pasted into the focused window. No window, only a small HUD
@@ -51,7 +55,7 @@ the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 
 - `imla setup [--shortcut KEYS] [--terminal-paste]`: key, terms; enables and restarts the service
 - `imla status`: ready / listening / transcribing, or not running
-- Hidden: `daemon` (run by systemd), `toggle` (start/stop without the shortcut), `transcribe x.wav`, `hud-demo`
+- Hidden: `daemon` (run by systemd), `toggle` (start/stop without the shortcut), `transcribe x.wav`, `hud-demo`, `render-demo out.rgb` (offscreen HUD frames; `docs/hud.gif` is made from it with ffmpeg)
 - Logs: `journalctl --user -u imla -f` · Remove: `sudo pacman -R imla`
 
 ## Config (`~/.config/imla/config.toml`, 0600)

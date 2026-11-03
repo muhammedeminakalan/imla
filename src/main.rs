@@ -82,6 +82,9 @@ enum Cmd {
     /// Göstergeyi birkaç saniye sahte sesle göster (görünüm denemesi).
     #[command(hide = true)]
     HudDemo,
+    /// HUD animasyonunu dosyaya yaz (README görseli için).
+    #[command(hide = true)]
+    RenderDemo { out: PathBuf, #[arg(long, default_value_t = 3)] scale: u32 },
 }
 
 #[tokio::main]
@@ -103,6 +106,11 @@ async fn main() -> Result<()> {
         Cmd::Transcribe { wav } => {
             let cfg = Config::load()?;
             println!("{}", transcribe::transcribe(&cfg, &fs::read(&wav)?).await?);
+            Ok(())
+        }
+        Cmd::RenderDemo { out, scale } => {
+            let (w, h) = hud::render_demo(&out, scale, 30, [0x24, 0x29, 0x2f])?;
+            println!("{w}x{h} rgb24 30fps");
             Ok(())
         }
         Cmd::HudDemo => {

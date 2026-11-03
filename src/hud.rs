@@ -65,6 +65,57 @@ pub fn demo_rms(time: f32) -> f32 {
     10f32.powf(dot_scope::demo_loudness(time) / 20.0)
 }
 
+/// Renders the HUD offscreen (listen → transcribe → done) into raw RGB24 frames over a solid
+/// backdrop, for the README animation: `imla render-demo out.rgb` then ffmpeg. Returns the
+/// frame size in pixels.
+pub fn render_demo(path: &std::path::Path, scale: u32, fps: u32, backdrop: [u8; 3]) -> std::io::Result<(u32, u32)> {
+    use std::io::Write;
+    let (w, h) = (W * scale, H * scale);
+    let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let start = Instant::now();
+    let mut model = Indicator::new(start);
+    let mut canvas = vec![0u8; (w * h * 4) as usize];
+    let step = 1.0 / 240.0;
+    let per_frame = (240 / fps).max(1);
+    let (listen_until, busy_until, end) = (3.6f32, 5.6f32, 6.6f32);
+    let mut phase = 0;
+    let mut t = 0.0f32;
+    let mut next_level = 0.0f32;
+    let mut i = 0u32;
+    model.listen(start);
+    while t < end {
+        let now = start + Duration::from_secs_f32(t);
+        if phase == 0 && t >= listen_until {
+            model.busy(now);
+            phase = 1;
+        } else if phase == 1 && t >= busy_until {
+            model.hide(now);
+            phase = 2;
+        }
+        if phase == 0 && t >= next_level {
+            model.level(demo_rms(t));
+            next_level += 0.032;
+        }
+        model.step(now, step);
+        if i % per_frame == 0 {
+            shader::render(&model, w, h, scale as f32, &mut canvas);
+            let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+            for px in canvas.chunks_exact(4) {
+                // premultiplied BGRA over an opaque backdrop
+                let a = px[3] as u32;
+                for (c, bg) in [px[2], px[1], px[0]].into_iter().zip(backdrop) {
+                    rgb.push((c as u32 + bg as u32 * (255 - a) / 255).min(255) as u8);
+                }
+            }
+            out.write_all(&rgb)?;
+        }
+        t += step;
+        i += 1;
+    }
+    out.flush()?;
+    Ok((w, h))
+}
+
 /// Starts the HUD thread. Without a Wayland session or layer-shell it logs why and returns a
 /// sender whose messages are dropped, so dictation still works.
 pub fn spawn() -> Sender<HudMsg> {
