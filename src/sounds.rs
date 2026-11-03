@@ -1,5 +1,4 @@
-//! Recording tones: Hex's "classic" sound set (resources/audio/sounds/classic, anomalyco/hex, MIT;
-//! see THIRD_PARTY_NOTICES.md), played through PipeWire's `pw-play`.
+//! Recording tones (start, stop, dropped), played through PipeWire's `pw-play`.
 
 use std::{fs, path::PathBuf, process::Stdio};
 

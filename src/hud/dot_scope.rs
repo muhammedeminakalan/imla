@@ -1,11 +1,7 @@
-// Ported from anomalyco/hex (MIT License, Copyright (c) 2026 Christopher Langton).
-// See THIRD_PARTY_NOTICES.md. Original: src/rune_hud/dot_scope.rs
 //! Dot scope: the recording indicator as a field of dots lit by a braided
 //! pair of oscilloscope traces that follow the voice. [`Tuning`] holds the
-//! defaults of Hex's prototype; [`Scope`] steps the simulation at a fixed
+//! defaults; [`Scope`] steps the simulation at a fixed
 //! 240 Hz and yields one brightness pair per dot for the shader.
-//! (HUD Lab, the saved tuning file, knobs, placement and notch island of the
-//! original are not ported.)
 
 mod scope;
 pub use scope::*;

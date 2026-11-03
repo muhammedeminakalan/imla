@@ -1,6 +1,3 @@
-// Ported from anomalyco/hex (MIT License, Copyright (c) 2026 Christopher Langton).
-// See THIRD_PARTY_NOTICES.md. Original: src/rune_hud.wgsl (`dot_scope_fragment`),
-// evaluated here on the CPU for every pixel, and the uniform set-up of src/rune_hud.rs.
 //! The Dot scope fragment shader on the CPU: plate, rim, drop shadow, glow
 //! and the dot grid, as premultiplied BGRA for `wl_shm`.
 

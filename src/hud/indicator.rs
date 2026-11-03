@@ -1,5 +1,3 @@
-// Ported from anomalyco/hex (MIT License, Copyright (c) 2026 Christopher Langton).
-// See THIRD_PARTY_NOTICES.md. Original: src/dictation/indicator.rs (state machine only).
 //! The indicator model: which look Dot scope shows (recording, transcribing,
 //! done, failed) and when it fades out, driven by the dictation events.
 

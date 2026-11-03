@@ -29,7 +29,7 @@ pub struct Config {
     pub paste_keys: String,
     /// Put the previous clipboard text back after pasting.
     pub restore_clipboard: bool,
-    /// Play Hex's recording tones (start, stop, dropped).
+    /// Play the recording tones (start, stop, dropped).
     pub sound_effects: bool,
     /// Tone volume, 0 to 1.
     pub sound_volume: f32,

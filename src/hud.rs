@@ -1,5 +1,4 @@
-//! The dictation HUD: Hex's "Dot scope" (ported from anomalyco/hex, MIT, see
-//! `THIRD_PARTY_NOTICES.md`) as a small click-through overlay at the top of the screen (wlr
+//! The dictation HUD, "Dot scope": a small click-through overlay at the top of the screen (wlr
 //! layer-shell, which KWin supports). A field of dots lit by braided traces follows the voice
 //! while listening, flows while transcribing, clears when done and turns coral on an error. It
 //! runs on its own thread with its own Wayland connection and never blocks the dictation loop;
@@ -60,7 +59,7 @@ const W: u32 = 168;
 const H: u32 = 60;
 const FRAME: Duration = Duration::from_micros(16_667);
 
-/// Hex's synthetic voice (phrases of syllables with breaths) as the linear RMS a microphone
+/// A synthetic voice (phrases of syllables with breaths) as the linear RMS a microphone
 /// would report `time` seconds in, for `hud-demo`.
 pub fn demo_rms(time: f32) -> f32 {
     10f32.powf(dot_scope::demo_loudness(time) / 20.0)

@@ -1,6 +1,3 @@
-// Ported from anomalyco/hex (MIT License, Copyright (c) 2026 Christopher Langton).
-// See THIRD_PARTY_NOTICES.md. Original: src/rune_hud/dot_scope/scope.rs
-
 //! Dot scope's simulation: steps the voice, the braided traces, and the
 //! phosphor at a fixed 240 Hz and yields one (brightness, freshness) pair
 //! per dot.
@@ -101,7 +98,7 @@ struct Voice {
     energy: f32,
     kick: f32,
     kick_velocity: f32,
-    /// The prototype's 16 bands, all the level: Hex meters no spectrum.
+    /// The prototype's 16 bands, all the level: no spectrum is metered.
     band: f32,
 }
 

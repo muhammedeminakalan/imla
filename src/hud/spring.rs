@@ -1,5 +1,3 @@
-// Ported from anomalyco/hex (MIT License, Copyright (c) 2026 Christopher Langton).
-// See THIRD_PARTY_NOTICES.md. Original: src/rune_hud/spring.rs
 //! Frame-rate independent spring physics for Dot scope's simulation and
 //! other animations.
 

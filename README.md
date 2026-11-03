@@ -2,9 +2,9 @@
 
 Hold a shortcut, speak, release: the speech is transcribed by an audio model on OpenRouter
 (default `openai/gpt-audio-mini`) and pasted into the focused window. No window, only a small HUD
-pill at the top of the screen: Hex's "Dot scope" (dots lit by braided traces that follow the voice, flowing light while transcribing).
-Built for KDE Plasma on Wayland. The working logic follows [Hex](https://github.com/anomalyco/hex)
-(MIT); no Hex code is copied.
+pill at the top of the screen: "Dot scope" (dots lit by braided traces that follow the voice,
+flowing light while transcribing). Built for KDE Plasma on Wayland. Third-party licenses:
+`THIRD_PARTY_NOTICES.md`.
 
 ## How it works
 
@@ -19,7 +19,7 @@ Built for KDE Plasma on Wayland. The working logic follows [Hex](https://github.
   Ctrl+Shift+V) is pressed through the RemoteDesktop portal (keyboard only; KDE asks once, the
   grant is kept with a restore token in `~/.local/state/dictate/`). The previous clipboard text is
   restored afterwards. Without the portal grant the text is only left on the clipboard.
-- **HUD:** wlr layer-shell overlay on its own thread; click-through. Hex's Dot scope ported to Rust (`src/hud/`, MIT, see `THIRD_PARTY_NOTICES.md`), shader evaluated on the CPU into wl_shm at ~60 fps while visible, idle when hidden. `HudMsg::Level` carries linear RMS.
+- **HUD:** wlr layer-shell overlay on its own thread; click-through. Dot scope (`src/hud/`), shader evaluated on the CPU into wl_shm at ~60 fps while visible, idle when hidden. `HudMsg::Level` carries linear RMS.
 
 ## Build (no Rust toolchain on the machine; Docker)
 
@@ -47,6 +47,6 @@ System Settings → Shortcuts) and to allow keyboard control (for pasting).
 
 ## Config (`~/.config/dictate/config.toml`, 0600)
 
-`api_key`, `model`, `sound_effects` / `sound_volume` (Hex's classic start/stop/cancel tones via `pw-play`, default on, 0.5), `language` (`tr`), `terms` (list), `shortcut`, `paste_keys`
+`api_key`, `model`, `sound_effects` / `sound_volume` (start/stop/cancel tones via `pw-play`, default on, 0.5), `language` (`tr`), `terms` (list), `shortcut`, `paste_keys`
 (`ctrl+v` / `ctrl+shift+v`), `restore_clipboard`, `max_seconds`. `OPENROUTER_API_KEY` in the
 environment is used when `api_key` is empty.
