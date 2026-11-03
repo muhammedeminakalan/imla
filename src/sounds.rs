@@ -33,7 +33,7 @@ impl Sound {
 
     /// The tone as a file pw-play can open, written once to the cache.
     fn file(self) -> Option<PathBuf> {
-        let dir = dirs::cache_dir()?.join("dictate/sounds");
+        let dir = dirs::cache_dir()?.join("imla/sounds");
         let path = dir.join(format!("{}.wav", self.name()));
         let current = fs::metadata(&path).map(|m| m.len() == self.bytes().len() as u64).unwrap_or(false);
         if !current {

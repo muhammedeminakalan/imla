@@ -187,7 +187,7 @@ impl Hud {
             }
             surface.set_buffer_scale(self.scale);
             let layer =
-                self.layer_shell.create_layer_surface(qh, surface, Layer::Overlay, Some("dictate-hud"), None);
+                self.layer_shell.create_layer_surface(qh, surface, Layer::Overlay, Some("imla-hud"), None);
             layer.set_anchor(Anchor::TOP);
             layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer.set_size(W, H);

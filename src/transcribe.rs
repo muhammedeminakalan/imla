@@ -33,7 +33,7 @@ fn post(cfg: &Config, path: &str, body: &Value) -> reqwest::RequestBuilder {
     reqwest::Client::new()
         .post(format!("https://openrouter.ai/api/v1/{path}"))
         .bearer_auth(&cfg.api_key)
-        .header("X-Title", "dictate")
+        .header("X-Title", "imla")
         .timeout(Duration::from_secs(90))
         .json(body)
 }
@@ -50,7 +50,7 @@ async fn send(req: reqwest::RequestBuilder) -> Result<Value> {
 
 pub async fn transcribe(cfg: &Config, wav: &[u8]) -> Result<String> {
     if cfg.api_key.is_empty() {
-        bail!("{}", crate::i18n::t("OpenRouter anahtarı yok: `dictate setup` çalıştır", "no OpenRouter key: run `dictate setup`"));
+        bail!("{}", crate::i18n::t("OpenRouter anahtarı yok: `imla setup` çalıştır", "no OpenRouter key: run `imla setup`"));
     }
     let audio = base64::engine::general_purpose::STANDARD.encode(wav);
     let body = json!({

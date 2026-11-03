@@ -1,13 +1,15 @@
 # Maintainer: Muhammed Emin Akalan <muhammedemin@akalan.dev>
 # Packages the binary built in this repository (`make dist`, Rust in Docker); nothing is
 # compiled here, so makepkg needs no Rust toolchain.
-pkgname=dictate
-pkgver=0.1.2
+pkgname=imla
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Push-to-talk dictation for KDE Plasma (Wayland): hold a shortcut, speak, the text is pasted'
 arch=('x86_64')
 license=('MIT')
 depends=('glibc' 'gcc-libs' 'pipewire-audio' 'xdg-desktop-portal')  # pipewire-audio: pw-record, pw-play
+conflicts=('dictate')
+replaces=('dictate')
 optdepends=('xdg-desktop-portal-kde: global shortcut and paste on KDE Plasma')
 options=('!strip' '!debug')
 source=()
@@ -15,11 +17,11 @@ source=()
 _root="$startdir/../.."
 
 package() {
-  install -Dm755 "$_root/dist/dictate" "$pkgdir/usr/bin/dictate"
-  install -Dm644 "$_root/packaging/app-dev.akalan.dictate.service" \
-    "$pkgdir/usr/lib/systemd/user/app-dev.akalan.dictate.service"
-  install -Dm644 "$_root/packaging/dev.akalan.dictate.desktop" \
-    "$pkgdir/usr/share/applications/dev.akalan.dictate.desktop"
+  install -Dm755 "$_root/dist/imla" "$pkgdir/usr/bin/imla"
+  install -Dm644 "$_root/packaging/app-dev.akalan.imla.service" \
+    "$pkgdir/usr/lib/systemd/user/app-dev.akalan.imla.service"
+  install -Dm644 "$_root/packaging/dev.akalan.imla.desktop" \
+    "$pkgdir/usr/share/applications/dev.akalan.imla.desktop"
   install -Dm644 "$_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 "$_root/THIRD_PARTY_NOTICES.md" "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
 }

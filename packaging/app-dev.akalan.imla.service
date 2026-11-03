@@ -1,11 +1,11 @@
 [Unit]
-Description=dictate: sesle yazdırma
+Description=imla: sesle yazdırma
 PartOf=graphical-session.target
 After=graphical-session.target
 StartLimitIntervalSec=0
 
 [Service]
-ExecStart=/usr/bin/dictate daemon
+ExecStart=/usr/bin/imla daemon
 Restart=on-failure
 RestartSec=3
 

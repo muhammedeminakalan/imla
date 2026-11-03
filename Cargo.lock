@@ -383,30 +383,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dictate"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "ashpd",
- "base64",
- "clap",
- "dirs",
- "env_logger",
- "futures-util",
- "libc",
- "log",
- "reqwest",
- "rpassword",
- "serde",
- "serde_json",
- "smithay-client-toolkit",
- "tokio",
- "toml",
- "wayland-client",
- "wl-clipboard-rs",
-]
-
-[[package]]
 name = "dirs"
 version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -898,6 +874,30 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "imla"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "ashpd",
+ "base64",
+ "clap",
+ "dirs",
+ "env_logger",
+ "futures-util",
+ "libc",
+ "log",
+ "reqwest",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "smithay-client-toolkit",
+ "tokio",
+ "toml",
+ "wayland-client",
+ "wl-clipboard-rs",
 ]
 
 [[package]]

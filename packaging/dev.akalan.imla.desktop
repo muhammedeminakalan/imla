@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=dictate
+Name=İmlâ
 Comment=Sesle yazdırma
-Exec=/usr/bin/dictate daemon
+Exec=/usr/bin/imla daemon
 Icon=audio-input-microphone
 NoDisplay=true
 Terminal=false

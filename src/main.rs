@@ -1,4 +1,4 @@
-//! dictate: hold a shortcut, speak, release; the speech is transcribed by an OpenRouter audio
+//! imla: hold a shortcut, speak, release; the speech is transcribed by an OpenRouter audio
 //! model and pasted into the focused window. KDE Plasma (Wayland) first.
 
 mod config;
@@ -41,9 +41,9 @@ use crate::{
     paste::Paster,
 };
 
-const SHORTCUT_ID: &str = "dictate";
+const SHORTCUT_ID: &str = "imla";
 /// The portal also derives the app id from the unit name (app-<id>.service).
-const UNIT: &str = "app-dev.akalan.dictate.service";
+const UNIT: &str = "app-dev.akalan.imla.service";
 /// A press shorter than this latches recording on until the next press (tap to start, tap to stop).
 const TAP: Duration = Duration::from_millis(350);
 
@@ -85,7 +85,8 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("dictate=info,zbus=error")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("imla=info,zbus=error")).init();
+    config::migrate_old_name();
     match parse_cli().cmd {
         Cmd::Setup { shortcut, language, terminal_paste } => setup(shortcut, language, terminal_paste).await,
         Cmd::Daemon => daemon().await,
@@ -141,13 +142,13 @@ fn parse_cli() -> Cli {
             "Hold the shortcut, speak, release: what you said is transcribed and pasted.",
         ))
         .help_template(top)
-        .override_usage(t("dictate <KOMUT>", "dictate <COMMAND>"))
+        .override_usage(t("imla <KOMUT>", "imla <COMMAND>"))
         .mut_arg("help", |a| a.help(t("Yardımı göster", "Show help")))
         .mut_arg("version", |a| a.help(t("Sürümü göster", "Show version")))
         .mut_subcommand("setup", |c| {
             c.about(t("API anahtarını kaydet, kısayolu ve arka plan servisini kur", "Save the API key, set up the shortcut and the background service"))
                 .help_template(sub.clone())
-                .override_usage(t("dictate setup [SEÇENEKLER]", "dictate setup [OPTIONS]"))
+                .override_usage(t("imla setup [SEÇENEKLER]", "imla setup [OPTIONS]"))
                 .mut_arg("shortcut", |a| a.help(t("Tercih edilen kısayol (XDG biçimi), ör. \"CTRL+ALT+D\"", "Preferred shortcut (XDG syntax), e.g. \"CTRL+ALT+D\"")).value_name(t("TUŞLAR", "KEYS")))
                 .mut_arg("language", |a| a.help(t("Konuşma dili: auto (kendisi anlar) ya da ISO kodu, ör. tr, en, de", "Speech language: auto (detected) or an ISO code, e.g. tr, en, de")).value_name(t("DİL", "LANG")))
                 .mut_arg("terminal_paste", |a| a.help(t("Ctrl+Shift+V ile yapıştır (terminal ağırlıklı çalışıyorsan)", "Paste with Ctrl+Shift+V (if you mostly work in terminals)")))
@@ -155,7 +156,7 @@ fn parse_cli() -> Cli {
         .mut_subcommand("status", |c| {
             c.about(t("Servis çalışıyor mu, ne yapıyor", "Whether the service runs and what it is doing"))
                 .help_template(sub.clone())
-                .override_usage("dictate status")
+                .override_usage("imla status")
         });
     let matches = cmd.get_matches();
     Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
@@ -173,7 +174,7 @@ fn reply_text(key: &str) -> &'static str {
 }
 
 fn socket_path() -> PathBuf {
-    dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("dictate.sock")
+    dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("imla.sock")
 }
 
 async fn control(cmd: &str) -> Result<String> {
@@ -205,7 +206,7 @@ type SharedPaster = Arc<tokio::sync::Mutex<Option<Paster>>>;
 async fn daemon() -> Result<()> {
     let cfg = Arc::new(Config::load()?);
     if cfg.api_key.is_empty() {
-        bail!("{}", i18n::t("ayar yok: önce `dictate setup` çalıştır", "not set up: run `dictate setup` first"));
+        bail!("{}", i18n::t("ayar yok: önce `imla setup` çalıştır", "not set up: run `imla setup` first"));
     }
     let conn = ashpd::zbus::Connection::session().await?;
     // without the app id KDE can't remember the shortcut; fail so systemd retries
@@ -431,7 +432,7 @@ fn spawn_control_socket(
 
 async fn setup(shortcut: Option<String>, language: Option<String>, terminal_paste: bool) -> Result<()> {
     let mut cfg = Config::load()?;
-    println!("{}\n", i18n::t("dictate kurulumu", "dictate setup"));
+    println!("{}\n", i18n::t("imla kurulumu", "imla setup"));
     let key = rpassword::prompt_password(if cfg.api_key.is_empty() {
         i18n::t("OpenRouter API anahtarı: ", "OpenRouter API key: ")
     } else {
@@ -464,6 +465,8 @@ async fn setup(shortcut: Option<String>, language: Option<String>, terminal_past
     println!("{}", tf!("Ayarlar kaydedildi: {}", "Settings saved: {}", config::path().display()));
 
     systemctl(&["daemon-reload"])?;
+    // the service under the project's former name, if it is still enabled
+    let _ = systemctl(&["disable", "--now", "app-dev.akalan.dictate.service"]);
     systemctl(&["enable", UNIT])?;
     systemctl(&["restart", UNIT])?;
     let sc = &cfg.shortcut;
@@ -473,11 +476,11 @@ async fn setup(shortcut: Option<String>, language: Option<String>, terminal_past
             "\nServis başladı. KDE şimdi iki pencere açabilir:\n  1. Kısayolu onayla (önerilen: {sc}; istersen değiştir).\n  \
              2. Klavye denetimine izin ver (yapıştırmak için; bir kez sorulur).\n\n\
              Kullanım: kısayola basılı tut, konuş, bırak. Kısa bas: konuşmayı bitirince yine kısa bas.\n\
-             Durum: `dictate status` · Kayıtlar: `journalctl --user -u app-dev.akalan.dictate -f`",
+             Durum: `imla status` · Kayıtlar: `journalctl --user -u app-dev.akalan.imla -f`",
             "\nThe service started. KDE may now open two dialogs:\n  1. Confirm the shortcut (suggested: {sc}; change it if you like).\n  \
              2. Allow keyboard control (for pasting; asked once).\n\n\
              Use: hold the shortcut, speak, release. Tap: tap again when you are done speaking.\n\
-             Status: `dictate status` · Logs: `journalctl --user -u app-dev.akalan.dictate -f`"
+             Status: `imla status` · Logs: `journalctl --user -u app-dev.akalan.imla -f`"
         )
     );
     Ok(())

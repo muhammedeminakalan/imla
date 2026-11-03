@@ -8,9 +8,9 @@ test:
 
 dist: test build
 	mkdir -p dist
-	install -m755 target/release/dictate dist/dictate
+	install -m755 target/release/imla dist/imla
 
-# Arch package in packaging/arch (dictate-<ver>-1-x86_64.pkg.tar.zst)
+# Arch package in packaging/arch (imla-<ver>-1-x86_64.pkg.tar.zst)
 package: dist
 	cd packaging/arch && rm -f *.pkg.tar.zst && makepkg -f
 

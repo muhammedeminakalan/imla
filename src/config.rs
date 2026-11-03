@@ -1,4 +1,4 @@
-//! User settings in ~/.config/dictate/config.toml (owner-only: it holds the API key).
+//! User settings in ~/.config/imla/config.toml (owner-only: it holds the API key).
 
 use std::{
     fs,
@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub const APP_ID: &str = "dev.akalan.dictate";
+pub const APP_ID: &str = "dev.akalan.imla";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -55,11 +55,29 @@ impl Default for Config {
 }
 
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir().expect("no config dir").join("dictate")
+    dirs::config_dir().expect("no config dir").join("imla")
 }
 
 pub fn state_dir() -> PathBuf {
-    dirs::state_dir().expect("no state dir").join("dictate")
+    dirs::state_dir().expect("no state dir").join("imla")
+}
+
+/// Moves settings and state kept under the project's former name ("dictate") to the new one.
+pub fn migrate_old_name() {
+    let pairs = [
+        (dirs::config_dir(), "config"),
+        (dirs::state_dir(), "state"),
+    ];
+    for (base, what) in pairs {
+        let Some(base) = base else { continue };
+        let (old, new) = (base.join("dictate"), base.join("imla"));
+        if old.is_dir() && !new.exists() {
+            match fs::rename(&old, &new) {
+                Ok(()) => log::info!("{what}: {} -> {}", old.display(), new.display()),
+                Err(e) => log::warn!("{what}: {} taşınamadı: {e}", old.display()),
+            }
+        }
+    }
 }
 
 pub fn path() -> PathBuf {
