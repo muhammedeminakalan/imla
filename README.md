@@ -48,8 +48,11 @@ the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 
 ## Providers: OpenRouter or local
 
-`imla setup` asks which one to use; `imla use openrouter|local` switches, `imla model [id]` shows
-or changes the model of the active one (the service restarts itself).
+`imla setup` and `imla model` walk through it with arrow-key menus: provider (OpenRouter or local)
+→ API key (OpenRouter; Enter keeps the saved one) → model. OpenRouter's list is fetched live
+(audio-in, text-out models; the ones that tested best first, `:batch` variants left out, or type
+any id); local models show their size and whether they are downloaded. The service restarts with
+the choice.
 
 - **OpenRouter:** an audio-capable model in the cloud (default `openai/gpt-audio-mini`); the key is
   checked at setup. Terms go into the system prompt as spelling hints.
@@ -79,7 +82,7 @@ model = "large-v3-turbo"
 ## Commands
 
 - `imla setup [--provider openrouter|local] [--model ID] [--shortcut KEYS] [--language xx] [--terminal-paste]`: provider, key or local model (downloaded), terms; enables and restarts the service
-- `imla use openrouter|local` · `imla model [id]`: switch, show/change the model (the service restarts itself)
+- `imla model`: choose the provider and model again (menus; the service restarts itself)
 - `imla status`: ready / listening / transcribing, or not running
 - Hidden: `daemon` (run by systemd), `toggle` (start/stop without the shortcut), `transcribe x.wav`, `hud-demo`, `render-demo out.rgb` (offscreen HUD frames; `docs/hud.gif` is made from it with ffmpeg)
 - Logs: `journalctl --user -u imla -f` · Remove: `sudo pacman -R imla`

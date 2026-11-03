@@ -15,16 +15,16 @@ use crate::{i18n::t, tf};
 
 pub const DEFAULT_MODEL: &str = "large-v3-turbo";
 
-/// id, file, size in MB, description.
-pub const MODELS: &[(&str, &str, u32, &str)] = &[
-    ("large-v3-turbo", "ggml-large-v3-turbo-q5_0.bin", 547, "best quality/speed balance (default)"),
-    ("large-v3-turbo-q8", "ggml-large-v3-turbo-q8_0.bin", 833, "slightly more accurate, larger"),
-    ("medium", "ggml-medium-q5_0.bin", 514, "older, slower than turbo"),
-    ("small", "ggml-small-q5_1.bin", 181, "fast, less accurate"),
-    ("base", "ggml-base-q5_1.bin", 56, "fastest, rough"),
+/// id, file, size in MB, description (Turkish, English).
+pub const MODELS: &[(&str, &str, u32, (&str, &str))] = &[
+    ("large-v3-turbo", "ggml-large-v3-turbo-q5_0.bin", 547, ("en iyi doğruluk/hız dengesi (önerilen)", "best accuracy/speed balance (recommended)")),
+    ("large-v3-turbo-q8", "ggml-large-v3-turbo-q8_0.bin", 833, ("biraz daha doğru, daha büyük", "slightly more accurate, larger")),
+    ("medium", "ggml-medium-q5_0.bin", 514, ("eski, turbo'dan yavaş", "older, slower than turbo")),
+    ("small", "ggml-small-q5_1.bin", 181, ("hızlı, daha az doğru", "fast, less accurate")),
+    ("base", "ggml-base-q5_1.bin", 56, ("en hızlı, kaba", "fastest, rough")),
 ];
 
-fn entry(id: &str) -> Result<&'static (&'static str, &'static str, u32, &'static str)> {
+fn entry(id: &str) -> Result<&'static (&'static str, &'static str, u32, (&'static str, &'static str))> {
     MODELS.iter().find(|m| m.0 == id).with_context(|| {
         let ids: Vec<_> = MODELS.iter().map(|m| m.0).collect();
         tf!("bilinmeyen yerel model '{id}' (seçenekler: {})", "unknown local model '{id}' (choices: {})", ids.join(", "))

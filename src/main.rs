@@ -12,7 +12,7 @@ mod transcribe;
 
 use std::{
     fs,
-    io::{BufRead, Write},
+    io::Write,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::Command,
@@ -75,8 +75,7 @@ enum Cmd {
         terminal_paste: bool,
     },
     Status,
-    Use { name: String },
-    Model { model: Option<String> },
+    Model,
     /// Arka plan servisi (systemd çalıştırır).
     #[command(hide = true)]
     Daemon,
@@ -102,8 +101,7 @@ async fn main() -> Result<()> {
         Cmd::Setup { provider, model, shortcut, language, terminal_paste } => {
             setup(shortcut, language, terminal_paste, provider, model).await
         }
-        Cmd::Use { name } => use_provider(&name),
-        Cmd::Model { model } => set_model(model).await,
+        Cmd::Model => change_model().await,
         Cmd::Daemon => daemon().await,
         Cmd::Toggle => {
             println!("{}", reply_text(&control("toggle").await?));
@@ -177,17 +175,10 @@ fn parse_cli() -> Cli {
                 .mut_arg("language", |a| a.help(t("Konuşma dili: auto (kendisi anlar) ya da ISO kodu, ör. tr, en, de", "Speech language: auto (detected) or an ISO code, e.g. tr, en, de")).value_name(t("DİL", "LANG")))
                 .mut_arg("terminal_paste", |a| a.help(t("Ctrl+Shift+V ile yapıştır (terminal ağırlıklı çalışıyorsan)", "Paste with Ctrl+Shift+V (if you mostly work in terminals)")))
         })
-        .mut_subcommand("use", |c| {
-            c.about(t("openrouter ile local arasında geç", "Switch between openrouter and local"))
-                .help_template(sub.clone())
-                .override_usage(t("imla use <AD>", "imla use <NAME>"))
-                .mut_arg("name", |a| a.help("openrouter | local").value_name(t("AD", "NAME")))
-        })
         .mut_subcommand("model", |c| {
-            c.about(t("Etkin sağlayıcının modelini göster ya da değiştir", "Show or change the active provider's model"))
+            c.about(t("Sağlayıcıyı ve modeli seç (OpenRouter ya da yerel)", "Choose the provider and model (OpenRouter or local)"))
                 .help_template(sub.clone())
-                .override_usage("imla model [MODEL]")
-                .mut_arg("model", |a| a.help(t("Yeni model (boşsa gösterir)", "New model (shows it when omitted)")).value_name("MODEL"))
+                .override_usage("imla model")
         })
         .mut_subcommand("status", |c| {
             c.about(t("Servis çalışıyor mu, ne yapıyor", "Whether the service runs and what it is doing"))
@@ -494,20 +485,6 @@ fn spawn_control_socket(
 
 
 
-/// Reads one line; an empty answer keeps `default`.
-fn ask(label: &str, default: &str) -> Result<String> {
-    if default.is_empty() {
-        print!("{label}: ");
-    } else {
-        print!("{label} [{default}]: ");
-    }
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    let line = line.trim();
-    Ok(if line.is_empty() { default.to_string() } else { line.to_string() })
-}
-
 fn engine_name(e: Engine) -> &'static str {
     match e {
         Engine::Openrouter => "openrouter",
@@ -523,19 +500,139 @@ fn parse_engine(name: &str) -> Result<Engine> {
     }
 }
 
-/// Picks a local model by number or id; the current one is the default.
-fn choose_local_model(current: &str) -> Result<String> {
-    println!("{}", i18n::t("Yerel modeller:", "Local models:"));
-    for (i, (id, _, mb, about)) in local::MODELS.iter().enumerate() {
-        let mark = if *id == current { "*" } else { " " };
-        let have = if local::model_path(id)?.exists() { i18n::t(" (indirilmiş)", " (downloaded)") } else { "" };
-        println!(" {mark}{}. {id:<18} {mb:>4} MB  {about}{have}", i + 1);
+fn theme() -> dialoguer::theme::ColorfulTheme {
+    dialoguer::theme::ColorfulTheme::default()
+}
+
+/// OpenRouter models that hear audio and answer in text; the ones that did best in our tests
+/// first, then the rest by name. Falls back to the recommended ones when the list is unreachable.
+async fn openrouter_audio_models() -> Vec<(String, String)> {
+    let recommended: [(&str, &str, &str); 4] = [
+        ("openai/gpt-audio-mini", "en iyi fiyat/doğruluk (önerilen)", "best price/accuracy (recommended)"),
+        ("google/gemini-3.8-flash", "en doğru, biraz yavaş", "most accurate, a bit slower"),
+        ("google/gemini-2.5-flash", "hızlı ve ucuz", "fast and cheap"),
+        ("openai/gpt-audio", "büyük model, pahalı", "large model, expensive"),
+    ];
+    let mut out: Vec<(String, String)> =
+        recommended.iter().map(|(id, tr, en)| (id.to_string(), i18n::t(tr, en).to_string())).collect();
+    let listed = async {
+        let v: serde_json::Value = reqwest::Client::new()
+            .get("https://openrouter.ai/api/v1/models")
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        Some(v["data"].as_array()?.clone())
     }
-    let pick = ask(i18n::t("Model (numara ya da ad)", "Model (number or name)"), current)?;
-    Ok(match pick.parse::<usize>() {
-        Ok(i) if (1..=local::MODELS.len()).contains(&i) => local::MODELS[i - 1].0.to_string(),
-        _ => pick,
-    })
+    .await;
+    if let Some(models) = listed {
+        let has = |m: &serde_json::Value, key: &str, what: &str| {
+            m["architecture"][key].as_array().is_some_and(|a| a.iter().any(|x| x == what))
+        };
+        let mut rest: Vec<String> = models
+            .iter()
+            .filter(|m| has(m, "input_modalities", "audio") && has(m, "output_modalities", "text"))
+            .filter_map(|m| m["id"].as_str().map(str::to_string))
+            .filter(|id| !id.contains("auto") && !id.contains("router") && !id.starts_with('~') && !id.ends_with(":batch"))
+            .filter(|id| !out.iter().any(|(r, _)| r == id))
+            .collect();
+        rest.sort();
+        out.extend(rest.into_iter().map(|id| (id, String::new())));
+    }
+    out
+}
+
+/// Provider → (key) → model, with arrow-key menus. Used by `setup` and `imla model`.
+async fn choose(cfg: &mut Config, provider: Option<String>, model: Option<String>) -> Result<()> {
+    use dialoguer::{Input, Password, Select};
+    let engine = match provider {
+        Some(p) => parse_engine(&p)?,
+        None => {
+            let items = [
+                format!("OpenRouter  — {}", i18n::t("bulutta ses modeli (API anahtarı gerekir)", "audio model in the cloud (needs an API key)")),
+                format!("{}  — {}", i18n::t("Yerel", "Local"), i18n::t("bu bilgisayarda Whisper, internetsiz", "Whisper on this machine, offline")),
+            ];
+            let i = Select::with_theme(&theme())
+                .with_prompt(i18n::t("Sağlayıcı", "Provider"))
+                .items(&items)
+                .default(if cfg.provider == Engine::Local { 1 } else { 0 })
+                .interact()?;
+            if i == 1 { Engine::Local } else { Engine::Openrouter }
+        }
+    };
+    match engine {
+        Engine::Openrouter => {
+            let has_key = !cfg.openrouter.key().is_empty();
+            let key = Password::with_theme(&theme())
+                .with_prompt(if has_key {
+                    i18n::t("OpenRouter API anahtarı (aynısı kalsın diye Enter)", "OpenRouter API key (Enter keeps the current one)")
+                } else {
+                    i18n::t("OpenRouter API anahtarı", "OpenRouter API key")
+                })
+                .allow_empty_password(has_key)
+                .interact()?;
+            if !key.trim().is_empty() {
+                cfg.openrouter.api_key = key.trim().to_string();
+            }
+            check_key(&cfg.openrouter.key()).await?;
+            cfg.openrouter.model = match model {
+                Some(m) => m,
+                None => {
+                    let models = openrouter_audio_models().await;
+                    let mut items: Vec<String> = models
+                        .iter()
+                        .map(|(id, note)| if note.is_empty() { id.clone() } else { format!("{id:<26} {note}") })
+                        .collect();
+                    items.push(i18n::t("Başka bir model (adını yaz)", "Another model (type its id)").into());
+                    let current = models.iter().position(|(id, _)| *id == cfg.openrouter.model).unwrap_or(0);
+                    let i = Select::with_theme(&theme())
+                        .with_prompt(i18n::t("Model", "Model"))
+                        .items(&items)
+                        .default(current)
+                        .max_length(12)
+                        .interact()?;
+                    if i < models.len() {
+                        models[i].0.clone()
+                    } else {
+                        Input::<String>::with_theme(&theme())
+                            .with_prompt(i18n::t("Model adı", "Model id"))
+                            .with_initial_text(cfg.openrouter.model.clone())
+                            .interact_text()?
+                    }
+                }
+            };
+        }
+        Engine::Local => {
+            let id = match model {
+                Some(m) => m,
+                None => {
+                    let items: Vec<String> = local::MODELS
+                        .iter()
+                        .map(|(id, _, mb, (tr, en))| {
+                            let about = i18n::t(tr, en);
+                            let have = local::model_path(id).map(|p| p.exists()).unwrap_or(false);
+                            let have = if have { i18n::t("  ✓ indirilmiş", "  ✓ downloaded") } else { "" };
+                            format!("{id:<18} {mb:>4} MB  {about}{have}")
+                        })
+                        .collect();
+                    let current = local::MODELS.iter().position(|m| m.0 == cfg.local.model).unwrap_or(0);
+                    let i = Select::with_theme(&theme())
+                        .with_prompt(i18n::t("Model", "Model"))
+                        .items(&items)
+                        .default(current)
+                        .interact()?;
+                    local::MODELS[i].0.to_string()
+                }
+            };
+            local::ensure(&id).await?;
+            cfg.local.model = id;
+        }
+    }
+    cfg.provider = engine;
+    Ok(())
 }
 
 async fn setup(
@@ -547,41 +644,7 @@ async fn setup(
 ) -> Result<()> {
     let mut cfg = Config::load()?;
     println!("{}\n", i18n::t("imla kurulumu", "imla setup"));
-    let engine = match provider {
-        Some(p) => parse_engine(&p)?,
-        None => {
-            println!("  1. OpenRouter  {}", i18n::t("bulutta ses modeli (anahtar gerekir)", "audio model in the cloud (needs a key)"));
-            println!("  2. local       {}", i18n::t("bu bilgisayarda whisper.cpp, internetsiz", "whisper.cpp on this machine, offline"));
-            parse_engine(&ask(i18n::t("Sağlayıcı", "Provider"), engine_name(cfg.provider))?)?
-        }
-    };
-    match engine {
-        Engine::Openrouter => {
-            let label = if cfg.openrouter.key().is_empty() {
-                i18n::t("OpenRouter API anahtarı: ", "OpenRouter API key: ")
-            } else {
-                i18n::t("OpenRouter API anahtarı (aynısı kalsın diye boş bırak): ", "OpenRouter API key (leave empty to keep it): ")
-            };
-            let key = rpassword::prompt_password(label)?;
-            if !key.trim().is_empty() {
-                cfg.openrouter.api_key = key.trim().to_string();
-            }
-            check_key(&cfg.openrouter.key()).await?;
-            cfg.openrouter.model = match model {
-                Some(m) => m,
-                None => ask(i18n::t("Model", "Model"), &cfg.openrouter.model)?,
-            };
-        }
-        Engine::Local => {
-            let id = match model {
-                Some(m) => m,
-                None => choose_local_model(&cfg.local.model)?,
-            };
-            local::ensure(&id).await?;
-            cfg.local.model = id;
-        }
-    }
-    cfg.provider = engine;
+    choose(&mut cfg, provider, model).await?;
     if let Some(s) = shortcut {
         cfg.shortcut = s;
     }
@@ -592,10 +655,13 @@ async fn setup(
         cfg.paste_keys = "ctrl+shift+v".into();
     }
     if cfg.terms.is_empty() {
-        let line = ask(i18n::t(
-            "Doğru yazılmasını istediğin adlar/terimler (virgülle, boş geçebilirsin)",
-            "Names/terms to spell exactly (comma-separated, may be empty)",
-        ), "")?;
+        let line: String = dialoguer::Input::with_theme(&theme())
+            .with_prompt(i18n::t(
+                "Doğru yazılmasını istediğin adlar/terimler (virgülle, boş geçebilirsin)",
+                "Names/terms to spell exactly (comma-separated, may be empty)",
+            ))
+            .allow_empty(true)
+            .interact_text()?;
         cfg.terms = line.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     }
     cfg.save()?;
@@ -640,51 +706,17 @@ async fn check_key(key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Switches between OpenRouter and the local model.
-fn use_provider(name: &str) -> Result<()> {
+/// `imla model`: pick the provider and model again; the service restarts with them.
+async fn change_model() -> Result<()> {
     let mut cfg = Config::load()?;
-    let engine = parse_engine(name)?;
-    match engine {
-        Engine::Openrouter if cfg.openrouter.key().is_empty() => {
-            bail!("{}", i18n::t("OpenRouter anahtarı yok: `imla setup --provider openrouter`", "no OpenRouter key: run `imla setup --provider openrouter`"))
-        }
-        Engine::Local if !local::model_path(&cfg.local.model)?.exists() => {
-            bail!("{}", i18n::t("yerel model indirilmemiş: `imla setup --provider local`", "the local model is not downloaded: run `imla setup --provider local`"))
-        }
-        _ => {}
-    }
-    cfg.provider = engine;
+    choose(&mut cfg, None, None).await?;
     cfg.save()?;
     restart_if_running();
-    println!("{}", tf!("Etkin sağlayıcı: {}", "Active provider: {}", engine_name(engine)));
-    Ok(())
-}
-
-/// Shows or sets the active engine's model (a local one is downloaded first).
-async fn set_model(model: Option<String>) -> Result<()> {
-    let mut cfg = Config::load()?;
-    let name = engine_name(cfg.provider);
-    let Some(m) = model else {
-        match cfg.provider {
-            Engine::Openrouter => println!("{name}: {}", cfg.openrouter.model),
-            Engine::Local => {
-                println!("{name}: {}", cfg.local.model);
-                let ids: Vec<_> = local::MODELS.iter().map(|m| m.0).collect();
-                println!("{}", tf!("Seçenekler: {}", "Choices: {}", ids.join(", ")));
-            }
-        }
-        return Ok(());
+    let model = match cfg.provider {
+        Engine::Openrouter => cfg.openrouter.model.clone(),
+        Engine::Local => cfg.local.model.clone(),
     };
-    match cfg.provider {
-        Engine::Openrouter => cfg.openrouter.model = m.clone(),
-        Engine::Local => {
-            local::ensure(&m).await?;
-            cfg.local.model = m.clone();
-        }
-    }
-    cfg.save()?;
-    restart_if_running();
-    println!("{}", tf!("{name} modeli: {m}", "{name} model: {m}"));
+    println!("{}", tf!("Etkin: {} · {model}", "Active: {} · {model}", engine_name(cfg.provider)));
     Ok(())
 }
 

@@ -2,7 +2,7 @@
 # Packages the binary built in this repository (`make dist`, Rust in Docker); nothing is
 # compiled here, so makepkg needs no Rust toolchain.
 pkgname=imla
-pkgver=0.4.0
+pkgver=0.5.0
 pkgrel=1
 pkgdesc='Push-to-talk dictation for KDE Plasma (Wayland): OpenRouter or an offline local Whisper model'
 arch=('x86_64')
