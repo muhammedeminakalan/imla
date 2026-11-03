@@ -75,7 +75,6 @@ enum Cmd {
         terminal_paste: bool,
     },
     Status,
-    Model,
     /// Arka plan servisi (systemd çalıştırır).
     #[command(hide = true)]
     Daemon,
@@ -101,7 +100,6 @@ async fn main() -> Result<()> {
         Cmd::Setup { provider, model, shortcut, language, terminal_paste } => {
             setup(shortcut, language, terminal_paste, provider, model).await
         }
-        Cmd::Model => change_model().await,
         Cmd::Daemon => daemon().await,
         Cmd::Toggle => {
             println!("{}", reply_text(&control("toggle").await?));
@@ -109,7 +107,12 @@ async fn main() -> Result<()> {
         }
         Cmd::Status => {
             let reply = control("status").await.unwrap_or_else(|_| "stopped".into());
-            println!("{}", reply_text(&reply));
+            let cfg = Config::load()?;
+            let model = match cfg.provider {
+                Engine::Openrouter => &cfg.openrouter.model,
+                Engine::Local => &cfg.local.model,
+            };
+            println!("{} · {} · {model}", reply_text(&reply), engine_name(cfg.provider));
             Ok(())
         }
         Cmd::Transcribe { wav } => {
@@ -174,11 +177,6 @@ fn parse_cli() -> Cli {
                 .mut_arg("shortcut", |a| a.help(t("Tercih edilen kısayol (XDG biçimi), ör. \"CTRL+ALT+D\"", "Preferred shortcut (XDG syntax), e.g. \"CTRL+ALT+D\"")).value_name(t("TUŞLAR", "KEYS")))
                 .mut_arg("language", |a| a.help(t("Konuşma dili: auto (kendisi anlar) ya da ISO kodu, ör. tr, en, de", "Speech language: auto (detected) or an ISO code, e.g. tr, en, de")).value_name(t("DİL", "LANG")))
                 .mut_arg("terminal_paste", |a| a.help(t("Ctrl+Shift+V ile yapıştır (terminal ağırlıklı çalışıyorsan)", "Paste with Ctrl+Shift+V (if you mostly work in terminals)")))
-        })
-        .mut_subcommand("model", |c| {
-            c.about(t("Sağlayıcıyı ve modeli seç (OpenRouter ya da yerel)", "Choose the provider and model (OpenRouter or local)"))
-                .help_template(sub.clone())
-                .override_usage("imla model")
         })
         .mut_subcommand("status", |c| {
             c.about(t("Servis çalışıyor mu, ne yapıyor", "Whether the service runs and what it is doing"))
@@ -504,50 +502,10 @@ fn theme() -> dialoguer::theme::ColorfulTheme {
     dialoguer::theme::ColorfulTheme::default()
 }
 
-/// OpenRouter models that hear audio and answer in text; the ones that did best in our tests
-/// first, then the rest by name. Falls back to the recommended ones when the list is unreachable.
-async fn openrouter_audio_models() -> Vec<(String, String)> {
-    let recommended: [(&str, &str, &str); 4] = [
-        ("openai/gpt-audio-mini", "en iyi fiyat/doğruluk (önerilen)", "best price/accuracy (recommended)"),
-        ("google/gemini-3.8-flash", "en doğru, biraz yavaş", "most accurate, a bit slower"),
-        ("google/gemini-2.5-flash", "hızlı ve ucuz", "fast and cheap"),
-        ("openai/gpt-audio", "büyük model, pahalı", "large model, expensive"),
-    ];
-    let mut out: Vec<(String, String)> =
-        recommended.iter().map(|(id, tr, en)| (id.to_string(), i18n::t(tr, en).to_string())).collect();
-    let listed = async {
-        let v: serde_json::Value = reqwest::Client::new()
-            .get("https://openrouter.ai/api/v1/models")
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .ok()?
-            .json()
-            .await
-            .ok()?;
-        Some(v["data"].as_array()?.clone())
-    }
-    .await;
-    if let Some(models) = listed {
-        let has = |m: &serde_json::Value, key: &str, what: &str| {
-            m["architecture"][key].as_array().is_some_and(|a| a.iter().any(|x| x == what))
-        };
-        let mut rest: Vec<String> = models
-            .iter()
-            .filter(|m| has(m, "input_modalities", "audio") && has(m, "output_modalities", "text"))
-            .filter_map(|m| m["id"].as_str().map(str::to_string))
-            .filter(|id| !id.contains("auto") && !id.contains("router") && !id.starts_with('~') && !id.ends_with(":batch"))
-            .filter(|id| !out.iter().any(|(r, _)| r == id))
-            .collect();
-        rest.sort();
-        out.extend(rest.into_iter().map(|id| (id, String::new())));
-    }
-    out
-}
-
-/// Provider → (key) → model, with arrow-key menus. Used by `setup` and `imla model`.
+/// Provider → (key) → model, with arrow-key menus.
 async fn choose(cfg: &mut Config, provider: Option<String>, model: Option<String>) -> Result<()> {
     use dialoguer::{Input, Password, Select};
+
     let engine = match provider {
         Some(p) => parse_engine(&p)?,
         None => {
@@ -581,27 +539,16 @@ async fn choose(cfg: &mut Config, provider: Option<String>, model: Option<String
             cfg.openrouter.model = match model {
                 Some(m) => m,
                 None => {
-                    let models = openrouter_audio_models().await;
-                    let mut items: Vec<String> = models
-                        .iter()
-                        .map(|(id, note)| if note.is_empty() { id.clone() } else { format!("{id:<26} {note}") })
-                        .collect();
-                    items.push(i18n::t("Başka bir model (adını yaz)", "Another model (type its id)").into());
-                    let current = models.iter().position(|(id, _)| *id == cfg.openrouter.model).unwrap_or(0);
-                    let i = Select::with_theme(&theme())
+                    println!("{}", i18n::t(
+                        "  Ses girişli bir model seç: https://openrouter.ai/models?input_modalities=audio",
+                        "  Pick a model with audio input: https://openrouter.ai/models?input_modalities=audio",
+                    ));
+                    Input::<String>::with_theme(&theme())
                         .with_prompt(i18n::t("Model", "Model"))
-                        .items(&items)
-                        .default(current)
-                        .max_length(12)
-                        .interact()?;
-                    if i < models.len() {
-                        models[i].0.clone()
-                    } else {
-                        Input::<String>::with_theme(&theme())
-                            .with_prompt(i18n::t("Model adı", "Model id"))
-                            .with_initial_text(cfg.openrouter.model.clone())
-                            .interact_text()?
-                    }
+                        .with_initial_text(cfg.openrouter.model.clone())
+                        .interact_text()?
+                        .trim()
+                        .to_string()
                 }
             };
         }
@@ -670,7 +617,11 @@ async fn setup(
     systemctl(&["daemon-reload"])?;
     // services under earlier names, if still enabled
     for old in ["app-dev.akalan.dictate.service", "app-dev.akalan.imla.service"] {
-        let _ = systemctl(&["disable", "--now", old]);
+        let _ = Command::new("systemctl")
+            .args(["--user", "disable", "--now", old])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
     systemctl(&["enable", UNIT])?;
     systemctl(&["restart", UNIT])?;
@@ -678,14 +629,14 @@ async fn setup(
     println!(
         "{}",
         tf!(
-            "\nServis başladı. KDE şimdi iki pencere açabilir:\n  1. Kısayolu onayla (önerilen: {sc}; istersen değiştir).\n  \
-             2. Klavye denetimine izin ver (yapıştırmak için; bir kez sorulur).\n\n\
+            "\nServis başladı. İlk kurulumda KDE iki şey sorar:\n  1. Kısayolu onayla (önerilen: {sc}; istersen değiştir).\n  \
+             2. Klavye denetimine izin ver (yapıştırmak için).\n\n\
              Kullanım: kısayola basılı tut, konuş, bırak. Kısa bas: konuşmayı bitirince yine kısa bas.\n\
-             Durum: `imla status` · Kayıtlar: `journalctl --user -u imla -f`",
-            "\nThe service started. KDE may now open two dialogs:\n  1. Confirm the shortcut (suggested: {sc}; change it if you like).\n  \
-             2. Allow keyboard control (for pasting; asked once).\n\n\
+             Değiştirmek için yine `imla setup` · Durum: `imla status` · Kayıtlar: `journalctl --user -u imla -f`",
+            "\nThe service started. On the first setup KDE asks two things:\n  1. Confirm the shortcut (suggested: {sc}; change it if you like).\n  \
+             2. Allow keyboard control (for pasting).\n\n\
              Use: hold the shortcut, speak, release. Tap: tap again when you are done speaking.\n\
-             Status: `imla status` · Logs: `journalctl --user -u imla -f`"
+             To change anything run `imla setup` again · Status: `imla status` · Logs: `journalctl --user -u imla -f`"
         )
     );
     Ok(())
@@ -704,24 +655,6 @@ async fn check_key(key: &str) -> Result<()> {
     }
     println!("{}", i18n::t("Anahtar doğrulandı.", "Key verified."));
     Ok(())
-}
-
-/// `imla model`: pick the provider and model again; the service restarts with them.
-async fn change_model() -> Result<()> {
-    let mut cfg = Config::load()?;
-    choose(&mut cfg, None, None).await?;
-    cfg.save()?;
-    restart_if_running();
-    let model = match cfg.provider {
-        Engine::Openrouter => cfg.openrouter.model.clone(),
-        Engine::Local => cfg.local.model.clone(),
-    };
-    println!("{}", tf!("Etkin: {} · {model}", "Active: {} · {model}", engine_name(cfg.provider)));
-    Ok(())
-}
-
-fn restart_if_running() {
-    let _ = Command::new("systemctl").args(["--user", "try-restart", UNIT]).status();
 }
 
 fn systemctl(args: &[&str]) -> Result<()> {
