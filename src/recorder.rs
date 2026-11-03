@@ -57,8 +57,16 @@ pub fn start(levels: mpsc::UnboundedSender<f32>) -> Result<Recording> {
 impl Recording {
     /// Stops the microphone and returns the captured samples.
     pub async fn stop(mut self) -> Vec<i16> {
-        let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
+        // the last syllable is often still in flight: keep listening a moment, then end pw-record
+        // with SIGINT so it flushes its buffers; SIGKILL only if it doesn't exit
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        if let Some(pid) = self.child.id() {
+            unsafe { libc::kill(pid as i32, libc::SIGINT) };
+        }
+        if tokio::time::timeout(std::time::Duration::from_millis(500), self.child.wait()).await.is_err() {
+            let _ = self.child.start_kill();
+            let _ = self.child.wait().await;
+        }
         self.reader.await.unwrap_or_default()
     }
 }

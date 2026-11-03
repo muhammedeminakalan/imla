@@ -66,6 +66,7 @@ pub fn spawn() -> Sender<HudMsg> {
     std::thread::Builder::new()
         .name("hud".into())
         .spawn(move || {
+            // a lost compositor connection ends the HUD only; dictation keeps working
             if let Err(e) = run(rx) {
                 log::warn!("HUD kapalı: {e:#}");
             }
@@ -130,6 +131,9 @@ fn run(rx: Channel<HudMsg>) -> Result<()> {
         if hud.mode == Mode::Error && hud.since.elapsed() > Duration::from_millis(900) {
             hud.hide();
         }
+        if hud.mode != Mode::Hidden && hud.layer.is_none() {
+            hud.create_layer(&qh); // the compositor closed it (e.g. output change) while visible
+        }
         if hud.configured {
             hud.draw();
         }
@@ -159,6 +163,10 @@ impl Hud {
     fn set_mode(&mut self, mode: Mode, qh: &QueueHandle<Self>) {
         self.mode = mode;
         self.since = Instant::now();
+        self.create_layer(qh);
+    }
+
+    fn create_layer(&mut self, qh: &QueueHandle<Self>) {
         if self.layer.is_none() {
             let surface = self.compositor.create_surface(qh);
             // empty input region: clicks go through to the window below
@@ -293,7 +301,8 @@ impl OutputHandler for Hud {
 
 impl LayerShellHandler for Hud {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.hide();
+        self.layer = None; // keep the mode: the run loop recreates the surface
+        self.configured = false;
     }
     fn configure(
         &mut self,

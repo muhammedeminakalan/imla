@@ -426,6 +426,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "futures-util",
+ "libc",
  "log",
  "reqwest",
  "rpassword",

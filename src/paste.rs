@@ -66,27 +66,39 @@ impl Paster {
         set_clipboard(text.to_string()).await?;
         // give the compositor a moment to announce the new selection
         tokio::time::sleep(Duration::from_millis(60)).await;
-        let shift = cfg.paste_keys.to_lowercase().contains("shift");
-        self.key(KEY_CONTROL_L, KeyState::Pressed).await?;
-        if shift {
-            self.key(KEY_SHIFT_L, KeyState::Pressed).await?;
+        let mut keys = vec![KEY_CONTROL_L];
+        if cfg.paste_keys.to_lowercase().contains("shift") {
+            keys.push(KEY_SHIFT_L);
         }
-        self.key(KEY_V, KeyState::Pressed).await?;
-        self.key(KEY_V, KeyState::Released).await?;
-        if shift {
-            self.key(KEY_SHIFT_L, KeyState::Released).await?;
+        keys.push(KEY_V);
+        let mut result = Ok(());
+        let mut down = Vec::new();
+        for &k in &keys {
+            if let Err(e) = self.key(k, KeyState::Pressed).await {
+                result = Err(e);
+                break;
+            }
+            down.push(k);
         }
-        self.key(KEY_CONTROL_L, KeyState::Released).await?;
+        // release whatever went down, even after an error, so no modifier stays stuck
+        for &k in down.iter().rev() {
+            let _ = self.key(k, KeyState::Released).await;
+        }
+        result?;
         if let Some(prev) = previous {
-            // the target app reads the clipboard asynchronously; restore after it had time to
-            tokio::time::sleep(Duration::from_millis(700)).await;
-            set_clipboard(prev).await?;
+            // only text is restored; the target app reads the clipboard asynchronously
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(700)).await;
+                if let Err(e) = set_clipboard(prev).await {
+                    log::warn!("eski pano geri konamadı: {e:#}");
+                }
+            });
         }
         Ok(())
     }
 }
 
-async fn set_clipboard(text: String) -> Result<()> {
+pub async fn set_clipboard(text: String) -> Result<()> {
     tokio::task::spawn_blocking(move || {
         copy::Options::new().copy(copy::Source::Bytes(text.into_bytes().into()), copy::MimeType::Text)
     })
@@ -94,8 +106,9 @@ async fn set_clipboard(text: String) -> Result<()> {
     .context("panoya yazılamadı")
 }
 
+/// The current clipboard text, if it is text and answers quickly (a stuck owner must not hang us).
 async fn read_clipboard() -> Option<String> {
-    tokio::task::spawn_blocking(|| {
+    let read = tokio::task::spawn_blocking(|| {
         use std::io::Read;
         let (mut pipe, _) =
             paste::get_contents(paste::ClipboardType::Regular, paste::Seat::Unspecified, paste::MimeType::Text)
@@ -103,8 +116,6 @@ async fn read_clipboard() -> Option<String> {
         let mut s = String::new();
         pipe.read_to_string(&mut s).ok()?;
         Some(s)
-    })
-    .await
-    .ok()
-    .flatten()
+    });
+    tokio::time::timeout(Duration::from_millis(500), read).await.ok()?.ok().flatten()
 }

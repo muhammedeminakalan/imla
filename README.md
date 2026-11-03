@@ -41,7 +41,7 @@ KDE then asks to confirm the shortcut (default Ctrl+Alt+D, changeable in the dia
 System Settings → Shortcuts) and to allow keyboard control (for pasting).
 
 - `dictate status` · `dictate toggle` (start/stop without the shortcut) · `dictate transcribe x.wav`
-- Logs: `journalctl --user -u dictate -f`
+- Logs: `journalctl --user -u app-dev.akalan.dictate -f` (unit `app-dev.akalan.dictate.service`; the portal also reads the app id from it)
 - `dictate uninstall` removes the service, binary and desktop entry; the config stays.
 - `dictate hud-demo` (hidden) shows the HUD for a few seconds.
 

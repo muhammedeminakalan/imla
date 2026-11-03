@@ -15,7 +15,7 @@ use std::{
     process::Command,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -40,6 +40,8 @@ use crate::{
 };
 
 const SHORTCUT_ID: &str = "dictate";
+/// The portal also derives the app id from the unit name (app-<id>.service).
+const UNIT: &str = "app-dev.akalan.dictate.service";
 /// A press shorter than this latches recording on until the next press (tap to start, tap to stop).
 const TAP: Duration = Duration::from_millis(350);
 
@@ -139,24 +141,23 @@ struct Active {
     latched: bool,
 }
 
+type Hud = smithay_client_toolkit::reexports::calloop::channel::Sender<HudMsg>;
+/// The RemoteDesktop session, opened lazily and reopened when it breaks; pastes are serialised.
+type SharedPaster = Arc<tokio::sync::Mutex<Option<Paster>>>;
+
 async fn daemon() -> Result<()> {
     let cfg = Arc::new(Config::load()?);
     if cfg.api_key.is_empty() {
         bail!("ayar yok: önce `dictate setup` çalıştır");
     }
     let conn = ashpd::zbus::Connection::session().await?;
-    if let Err(e) = ashpd::register_host_app_with_connection(conn.clone(), AppID::try_from(APP_ID)?).await {
-        log::warn!("portal kaydı yapılamadı: {e}");
-    }
+    // without the app id KDE can't remember the shortcut; fail so systemd retries
+    ashpd::register_host_app_with_connection(conn.clone(), AppID::try_from(APP_ID)?)
+        .await
+        .context("portal kaydı yapılamadı")?;
     let hud = hud::spawn();
-    let paster = match Paster::connect(conn.clone()).await {
-        Ok(p) => Some(Arc::new(p)),
-        Err(e) => {
-            log::warn!("yapıştırma kapalı, metin yalnız panoya yazılacak: {e:#}");
-            None
-        }
-    };
 
+    // shortcut and control socket first: they must work while KDE's keyboard dialog is open
     let shortcuts = GlobalShortcuts::with_connection(conn.clone()).await?;
     let session = shortcuts.create_session(Default::default()).await?;
     let bound = shortcuts
@@ -177,12 +178,26 @@ async fn daemon() -> Result<()> {
     let mut released = shortcuts.receive_deactivated().await?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
-    let busy = Arc::new(AtomicBool::new(false));
+    let busy = Arc::new(AtomicUsize::new(0));
     let listening = Arc::new(AtomicBool::new(false));
     spawn_control_socket(tx.clone(), busy.clone(), listening.clone())?;
 
+    let paster: SharedPaster = Arc::new(tokio::sync::Mutex::new(None));
+    {
+        let (paster, conn) = (paster.clone(), conn.clone());
+        tokio::spawn(async move {
+            let mut slot = paster.lock().await;
+            if slot.is_none() {
+                match Paster::connect(conn).await {
+                    Ok(p) => *slot = Some(p),
+                    Err(e) => log::warn!("klavye izni yok, ilk yapıştırmada yeniden sorulacak: {e:#}"),
+                }
+            }
+        });
+    }
+
     let mut active: Option<Active> = None;
-    let mut deadline = tokio::time::Instant::now() + Duration::from_secs(3600 * 24 * 365);
+    let mut deadline = tokio::time::Instant::now();
     log::info!("hazır");
     loop {
         let event = tokio::select! {
@@ -193,9 +208,7 @@ async fn daemon() -> Result<()> {
         };
         match (event, active.take()) {
             (Event::Press | Event::Toggle, None) => {
-                if busy.load(Ordering::SeqCst) {
-                    continue; // still transcribing the previous clip
-                }
+                // recording is independent of an earlier clip still being transcribed
                 let (ltx, mut lrx) = mpsc::unbounded_channel();
                 match recorder::start(ltx) {
                     Ok(rec) => {
@@ -220,17 +233,28 @@ async fn daemon() -> Result<()> {
                 active = Some(Active { latched: true, ..a });
             }
             (Event::Release, Some(a)) if a.latched => active = Some(a),
+            // a repeated press while the key is still held must not end the recording
+            (Event::Press, Some(a)) if !a.latched => active = Some(a),
             (_, Some(a)) => {
                 listening.store(false, Ordering::SeqCst);
-                busy.store(true, Ordering::SeqCst);
-                let (cfg, hud, paster, busy) = (cfg.clone(), hud.clone(), paster.clone(), busy.clone());
+                busy.fetch_add(1, Ordering::SeqCst);
+                let (cfg, hud, paster, conn, busy) =
+                    (cfg.clone(), hud.clone(), paster.clone(), conn.clone(), busy.clone());
                 tokio::spawn(async move {
                     let samples = a.rec.stop().await;
-                    if let Err(e) = finish(&cfg, &hud, paster.as_deref(), samples).await {
-                        log::error!("{e:#}");
-                        let _ = hud.send(HudMsg::Error);
+                    let job = finish(&cfg, &hud, &paster, conn, samples);
+                    match tokio::time::timeout(Duration::from_secs(150), job).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            log::error!("{e:#}");
+                            let _ = hud.send(HudMsg::Error);
+                        }
+                        Err(_) => {
+                            log::error!("zaman aşımı: yazıya dökme ya da yapıştırma bitmedi");
+                            let _ = hud.send(HudMsg::Error);
+                        }
                     }
-                    busy.store(false, Ordering::SeqCst);
+                    busy.fetch_sub(1, Ordering::SeqCst);
                 });
             }
             (Event::Release, None) => {}
@@ -240,8 +264,9 @@ async fn daemon() -> Result<()> {
 
 async fn finish(
     cfg: &Config,
-    hud: &smithay_client_toolkit::reexports::calloop::channel::Sender<HudMsg>,
-    paster: Option<&Paster>,
+    hud: &Hud,
+    paster: &SharedPaster,
+    conn: ashpd::zbus::Connection,
     samples: Vec<i16>,
 ) -> Result<()> {
     if recorder::is_silent(&samples) {
@@ -261,19 +286,32 @@ async fn finish(
     if text.is_empty() {
         return Ok(());
     }
-    match paster {
-        Some(p) => p.paste(cfg, &text).await,
-        None => {
-            wl_clipboard_rs::copy::Options::new()
-                .copy(wl_clipboard_rs::copy::Source::Bytes(text.into_bytes().into()), wl_clipboard_rs::copy::MimeType::Text)
-                .context("panoya yazılamadı")
+    let mut slot = paster.lock().await;
+    for attempt in 0..2 {
+        if slot.is_none() {
+            match Paster::connect(conn.clone()).await {
+                Ok(p) => *slot = Some(p),
+                Err(e) => {
+                    paste::set_clipboard(text).await?;
+                    bail!("klavye izni yok, metin panoda bırakıldı: {e:#}");
+                }
+            }
+        }
+        match slot.as_ref().unwrap().paste(cfg, &text).await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt == 0 => {
+                log::warn!("yapıştırma oturumu kopmuş, yeniden açılıyor: {e:#}");
+                *slot = None;
+            }
+            Err(e) => return Err(e.context("yapıştırılamadı, metin panoda")),
         }
     }
+    Ok(())
 }
 
 fn spawn_control_socket(
     tx: mpsc::UnboundedSender<Event>,
-    busy: Arc<AtomicBool>,
+    busy: Arc<AtomicUsize>,
     listening: Arc<AtomicBool>,
 ) -> Result<()> {
     let path = socket_path();
@@ -295,7 +333,7 @@ fn spawn_control_socket(
                         "tamam"
                     }
                     "status" if listening.load(Ordering::SeqCst) => "dinliyor",
-                    "status" if busy.load(Ordering::SeqCst) => "yazıya döküyor",
+                    "status" if busy.load(Ordering::SeqCst) > 0 => "yazıya döküyor",
                     "status" => "hazır",
                     _ => "bilinmeyen komut",
                 };
@@ -313,7 +351,7 @@ fn bin_path() -> PathBuf {
 }
 
 fn unit_path() -> PathBuf {
-    dirs::config_dir().unwrap().join("systemd/user/dictate.service")
+    dirs::config_dir().unwrap().join(format!("systemd/user/{UNIT}"))
 }
 
 fn desktop_path() -> PathBuf {
@@ -350,13 +388,13 @@ async fn setup(shortcut: Option<String>, terminal_paste: bool) -> Result<()> {
 
     install_files()?;
     systemctl(&["daemon-reload"])?;
-    systemctl(&["enable", "dictate.service"])?;
-    systemctl(&["restart", "dictate.service"])?;
+    systemctl(&["enable", UNIT])?;
+    systemctl(&["restart", UNIT])?;
     println!(
         "\nServis başladı. KDE şimdi iki pencere açabilir:\n  1. Kısayolu onayla (önerilen: {}; istersen değiştir).\n  \
          2. Klavye denetimine izin ver (yapıştırmak için; bir kez sorulur).\n\n\
          Kullanım: kısayola basılı tut, konuş, bırak. Kısa bas: konuşmayı bitirince yine kısa bas.\n\
-         Durum: `dictate status` · Kayıtlar: `journalctl --user -u dictate -f`",
+         Durum: `dictate status` · Kayıtlar: `journalctl --user -u app-dev.akalan.dictate -f`",
         cfg.shortcut
     );
     Ok(())
@@ -403,7 +441,7 @@ fn install_files() -> Result<()> {
         &unit,
         format!(
             "[Unit]\nDescription=dictate: sesle yazdırma\nPartOf=graphical-session.target\n\
-             After=graphical-session.target\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\
+             After=graphical-session.target\nStartLimitIntervalSec=0\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\
              RestartSec=3\n\n[Install]\nWantedBy=graphical-session.target\n",
             bin.display()
         ),
@@ -420,7 +458,7 @@ fn systemctl(args: &[&str]) -> Result<()> {
 }
 
 fn uninstall() -> Result<()> {
-    let _ = systemctl(&["disable", "--now", "dictate.service"]);
+    let _ = systemctl(&["disable", "--now", UNIT]);
     for p in [unit_path(), desktop_path(), bin_path()] {
         if p.exists() {
             fs::remove_file(&p)?;

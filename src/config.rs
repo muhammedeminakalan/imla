@@ -1,6 +1,11 @@
 //! User settings in ~/.config/dictate/config.toml (owner-only: it holds the API key).
 
-use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+use std::{
+    fs,
+    io::Write,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::PathBuf,
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -74,7 +79,9 @@ impl Config {
         fs::create_dir_all(&dir)?;
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
         let p = path();
-        fs::write(&p, toml::to_string_pretty(self)?)?;
+        // created owner-only from the start: the file holds the API key
+        let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&p)?;
+        f.write_all(toml::to_string_pretty(self)?.as_bytes())?;
         fs::set_permissions(&p, fs::Permissions::from_mode(0o600))?;
         Ok(())
     }
