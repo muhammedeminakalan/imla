@@ -1,9 +1,7 @@
-//! User settings in ~/.config/imla/config.toml (owner-only: it holds API keys).
+//! User settings in ~/.config/imla/config.toml (owner-only: it holds the API key).
 //!
-//! Speech goes to the active *provider* profile. Three kinds cover the market and local setups:
-//! an audio-capable chat model (OpenAI-compatible `chat/completions` with `input_audio`), an
-//! OpenAI-compatible `audio/transcriptions` endpoint (cloud or a local server), or any command
-//! that reads a WAV file and prints the text.
+//! Two engines: OpenRouter (an audio-capable model in the cloud) or a local whisper.cpp model
+//! kept in ~/.cache/imla/models.
 
 use std::{
     collections::BTreeMap,
@@ -19,99 +17,62 @@ use serde::{Deserialize, Serialize};
 pub const APP_ID: &str = "dev.akalan.imla";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Kind {
-    /// OpenAI-compatible `chat/completions` with an `input_audio` part.
-    ChatAudio,
-    /// OpenAI-compatible `audio/transcriptions` (multipart upload).
-    Transcriptions,
-    /// A local command; `{wav}` is replaced by the clip's path, `{lang}` by the language.
-    Command,
+#[serde(rename_all = "lowercase")]
+pub enum Engine {
+    /// An audio-capable model on OpenRouter.
+    Openrouter,
+    /// whisper.cpp on this machine, offline.
+    Local,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
-pub struct Provider {
-    pub kind: Kind,
-    /// API root, e.g. `https://openrouter.ai/api/v1`.
-    pub base_url: String,
-    /// Empty for keyless servers; falls back to the `key_env` environment variable.
+pub struct OpenRouter {
+    /// Empty: taken from OPENROUTER_API_KEY.
     pub api_key: String,
-    pub key_env: String,
     pub model: String,
-    /// Only for `kind = "command"`.
-    pub command: String,
 }
 
-impl Default for Provider {
+impl Default for OpenRouter {
     fn default() -> Self {
-        Self {
-            kind: Kind::Transcriptions,
-            base_url: String::new(),
-            api_key: String::new(),
-            key_env: String::new(),
-            model: String::new(),
-            command: String::new(),
-        }
+        Self { api_key: String::new(), model: "openai/gpt-audio-mini".into() }
     }
 }
 
-impl Provider {
-    pub fn needs_key(&self) -> bool {
-        self.kind != Kind::Command && !self.key_env.is_empty()
-    }
-
-    /// The key from the config, else from its environment variable.
+impl OpenRouter {
     pub fn key(&self) -> String {
-        if self.api_key.is_empty() && !self.key_env.is_empty() {
-            std::env::var(&self.key_env).unwrap_or_default()
-        } else {
-            self.api_key.clone()
-        }
+        if self.api_key.is_empty() { std::env::var("OPENROUTER_API_KEY").unwrap_or_default() } else { self.api_key.clone() }
     }
 }
 
-/// Ready-made profiles: name, profile, one-line description.
-pub fn presets() -> Vec<(&'static str, Provider, &'static str)> {
-    let p = |kind, base_url: &str, key_env: &str, model: &str| Provider {
-        kind,
-        base_url: base_url.into(),
-        key_env: key_env.into(),
-        model: model.into(),
-        ..Provider::default()
-    };
-    vec![
-        ("openrouter", p(Kind::ChatAudio, "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-audio-mini"),
-         "OpenRouter: many audio and speech models with one key"),
-        ("openai", p(Kind::Transcriptions, "https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini-transcribe"),
-         "OpenAI speech-to-text"),
-        ("groq", p(Kind::Transcriptions, "https://api.groq.com/openai/v1", "GROQ_API_KEY", "whisper-large-v3-turbo"),
-         "Groq: very fast hosted Whisper"),
-        ("gemini", p(Kind::ChatAudio, "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.5-flash"),
-         "Google Gemini (OpenAI-compatible endpoint)"),
-        ("mistral", p(Kind::Transcriptions, "https://api.mistral.ai/v1", "MISTRAL_API_KEY", "voxtral-mini-latest"),
-         "Mistral Voxtral"),
-        ("local-server", p(Kind::Transcriptions, "http://127.0.0.1:8000/v1", "", "whisper-1"),
-         "A local OpenAI-compatible server (whisper.cpp server, Speaches, LocalAI…), no key"),
-        ("local-command", Provider {
-            kind: Kind::Command,
-            command: "whisper-cli -m ~/models/ggml-large-v3-turbo.bin -l {lang} -nt -np -f {wav}".into(),
-            ..Provider::default()
-        }, "Any local program: gets the WAV path, prints the text"),
-    ]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Local {
+    /// One of `crate::local::MODELS`.
+    pub model: String,
+}
+
+impl Default for Local {
+    fn default() -> Self {
+        Self { model: crate::local::DEFAULT_MODEL.into() }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
-    /// Name of the active profile in `providers`.
-    pub provider: String,
-    pub providers: BTreeMap<String, Provider>,
-    /// Settings before providers existed (OpenRouter only); moved into `providers.openrouter`.
+    /// "openrouter" or "local".
+    #[serde(with = "engine_name")]
+    pub provider: Engine,
+    pub openrouter: OpenRouter,
+    pub local: Local,
+    /// Earlier layouts, read once and folded into `openrouter`.
     #[serde(skip_serializing)]
     pub(crate) api_key: String,
     #[serde(skip_serializing)]
     pub(crate) model: String,
+    #[serde(skip_serializing)]
+    pub(crate) providers: BTreeMap<String, toml::Value>,
     /// ISO-639-1 language of the speech, or "auto": written in whatever language is spoken.
     pub language: String,
     /// Words the model should spell exactly (names, jargon); sent as hints with every request.
@@ -132,14 +93,13 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let mut providers = BTreeMap::new();
-        let (name, openrouter, _) = presets().remove(0);
-        providers.insert(name.to_string(), openrouter);
         Self {
-            provider: name.into(),
-            providers,
+            provider: Engine::Openrouter,
+            openrouter: OpenRouter::default(),
+            local: Local::default(),
             api_key: String::new(),
             model: String::new(),
+            providers: BTreeMap::new(),
             language: "auto".into(),
             terms: Vec::new(),
             shortcut: "CTRL+ALT+D".into(),
@@ -195,28 +155,23 @@ impl Config {
     }
 
     fn migrate_legacy(&mut self) {
-        if self.api_key.is_empty() && self.model.is_empty() {
-            return;
+        // 0.3.x: [providers.openrouter] with api_key/model
+        if let Some(t) = self.providers.remove("openrouter") {
+            if let Some(k) = t.get("api_key").and_then(|v| v.as_str()).filter(|k| !k.is_empty()) {
+                self.openrouter.api_key = k.into();
+            }
+            if let Some(m) = t.get("model").and_then(|v| v.as_str()).filter(|m| !m.is_empty()) {
+                self.openrouter.model = m.into();
+            }
         }
-        let entry = self.providers.entry("openrouter".into()).or_insert_with(|| presets().remove(0).1);
+        self.providers.clear();
+        // before 0.3: top-level api_key/model
         if !self.api_key.is_empty() {
-            entry.api_key = std::mem::take(&mut self.api_key);
+            self.openrouter.api_key = std::mem::take(&mut self.api_key);
         }
         if !self.model.is_empty() {
-            entry.model = std::mem::take(&mut self.model);
+            self.openrouter.model = std::mem::take(&mut self.model);
         }
-    }
-
-    /// The active profile.
-    pub fn active(&self) -> Result<&Provider> {
-        self.providers.get(&self.provider).with_context(|| {
-            crate::tf!("'{}' adlı sağlayıcı yok: `imla setup`", "no provider named '{}': run `imla setup`", self.provider)
-        })
-    }
-
-    pub fn active_mut(&mut self) -> Result<&mut Provider> {
-        let name = self.provider.clone();
-        self.providers.get_mut(&name).with_context(|| crate::tf!("'{}' adlı sağlayıcı yok", "no provider named '{}'", name))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -232,29 +187,49 @@ impl Config {
     }
 }
 
+/// `provider` as a name; unknown names (from 0.3's other profiles) fall back to OpenRouter.
+mod engine_name {
+    use super::Engine;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(e: &Engine, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match e {
+            Engine::Openrouter => "openrouter",
+            Engine::Local => "local",
+        })
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Engine, D::Error> {
+        Ok(if String::deserialize(d)? == "local" { Engine::Local } else { Engine::Openrouter })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn old_config_moves_into_the_openrouter_profile() {
-        let mut cfg: Config = toml::from_str("api_key = \"sk-test\"\nmodel = \"openai/gpt-audio\"\n").unwrap();
+    fn load(text: &str) -> Config {
+        let mut cfg: Config = toml::from_str(text).unwrap();
         cfg.migrate_legacy();
-        let p = cfg.active().unwrap();
-        assert_eq!(cfg.provider, "openrouter");
-        assert_eq!((p.api_key.as_str(), p.model.as_str()), ("sk-test", "openai/gpt-audio"));
-        assert!(!toml::to_string(&cfg).unwrap().contains("\napi_key = \"sk-test\"\nmodel"));
+        cfg
     }
 
     #[test]
-    fn profiles_round_trip() {
-        let mut cfg = Config::default();
-        for (name, p, _) in presets() {
-            cfg.providers.insert(name.into(), p);
-        }
-        cfg.provider = "local-command".into();
-        let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
-        assert_eq!(back.active().unwrap().kind, Kind::Command);
-        assert_eq!(back.providers.len(), presets().len());
+    fn earlier_layouts_move_into_openrouter() {
+        let old = load("api_key = \"sk-1\"\nmodel = \"openai/gpt-audio\"\n");
+        assert_eq!((old.openrouter.api_key.as_str(), old.openrouter.model.as_str()), ("sk-1", "openai/gpt-audio"));
+        let v03 = load("provider = \"openrouter\"\n[providers.openrouter]\nkind = \"chat-audio\"\napi_key = \"sk-2\"\nmodel = \"m\"\n");
+        assert_eq!((v03.provider, v03.openrouter.api_key.as_str()), (Engine::Openrouter, "sk-2"));
+        let saved = toml::to_string(&v03).unwrap();
+        assert!(!saved.contains("providers") && saved.contains("[openrouter]"));
+    }
+
+    #[test]
+    fn local_round_trips() {
+        let cfg = load("provider = \"local\"\n[local]\nmodel = \"small\"\n");
+        assert_eq!((cfg.provider, cfg.local.model.as_str()), (Engine::Local, "small"));
+        let back: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.provider, Engine::Local);
+        assert_eq!(load("provider = \"groq\"\n").provider, Engine::Openrouter);
     }
 }

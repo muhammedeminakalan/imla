@@ -1,6 +1,6 @@
 [package]
 name = "imla"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 
@@ -22,4 +22,5 @@ smithay-client-toolkit = { version = "0.21.1", default-features = false, feature
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util", "signal"] }
 toml = "1.1.8"
 wayland-client = "0.31.15"
+whisper-rs = { version = "0.16.0", features = ["vulkan"] }
 wl-clipboard-rs = "0.9.5"

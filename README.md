@@ -4,8 +4,8 @@
 
 *imlâ* (Arabic/Ottoman إملاء): dictation, writing down what is spoken.
 
-Hold a shortcut, speak, release: the speech is transcribed by the provider you choose (cloud or
-local; default OpenRouter `openai/gpt-audio-mini`) and pasted into the focused window. No window, only a small HUD
+Hold a shortcut, speak, release: the speech is transcribed by OpenRouter or by a local Whisper
+model (offline, GPU) and pasted into the focused window. No window, only a small HUD
 pill at the top of the screen: "Dot scope" (dots lit by braided traces that follow the voice,
 flowing light while transcribing). Built for KDE Plasma on Wayland. Third-party licenses:
 `THIRD_PARTY_NOTICES.md`.
@@ -28,11 +28,11 @@ flowing light while transcribing). Built for KDE Plasma on Wayland. Third-party 
 ## Build (no Rust toolchain on the machine; Docker)
 
 ```bash
-./build.sh                 # cargo build --release in rust:1-slim-bookworm
+./build.sh                 # cargo build --release in packaging/docker (Rust, cmake, clang, Vulkan headers)
 ./build.sh test --release  # unit tests
 ```
 
-The binary only links glibc (`target/release/imla`).
+The binary links glibc, libstdc++ and libvulkan (`target/release/imla`).
 
 ## Arch package
 
@@ -46,35 +46,29 @@ The package ships `/usr/bin/imla`, the user unit `imla.service` and the
 `.desktop` entry. `setup` enables the packaged unit. Version: `pkgver` in
 the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 
-## Providers: any AI, cloud or local
+## Providers: OpenRouter or local
 
-`imla setup` asks which provider to use; profiles are kept side by side and switched with
-`imla use <name>`, the model with `imla model <id>`. Three kinds cover almost everything:
+`imla setup` asks which one to use; `imla use openrouter|local` switches, `imla model [id]` shows
+or changes the model of the active one (the service restarts itself).
 
-| Kind | What it calls | Ready-made profiles |
-|---|---|---|
-| `chat-audio` | OpenAI-compatible `chat/completions` with an `input_audio` part (audio-capable chat models) | `openrouter` (`openai/gpt-audio-mini`), `gemini` (`gemini-2.5-flash`) |
-| `transcriptions` | OpenAI-compatible `audio/transcriptions` (multipart upload) | `openai` (`gpt-4o-mini-transcribe`), `groq` (`whisper-large-v3-turbo`), `mistral` (`voxtral-mini-latest`), `local-server` (`http://127.0.0.1:8000/v1`, no key: whisper.cpp server, Speaches, LocalAI…) |
-| `command` | Any program: `{wav}` is the clip, `{lang}` the language; it prints the text | `local-command` (whisper.cpp `whisper-cli`) |
-
-Any other name given to `imla setup --provider NAME` makes a custom profile (kind, address, key,
-model). Keys may also come from the profile's environment variable (`OPENROUTER_API_KEY`,
-`OPENAI_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`). Terms are sent as spelling
-hints (system prompt for `chat-audio`, `prompt` for `transcriptions`).
+- **OpenRouter:** an audio-capable model in the cloud (default `openai/gpt-audio-mini`); the key is
+  checked at setup. Terms go into the system prompt as spelling hints.
+- **local:** whisper.cpp built in (whisper-rs, Vulkan GPU, falls back to the CPU), fully offline.
+  The model is downloaded once from `huggingface.co/ggerganov/whisper.cpp` into
+  `~/.cache/imla/models`: `large-v3-turbo` (q5_0, 547 MB, default), `large-v3-turbo-q8` (833 MB),
+  `medium` (514 MB), `small` (181 MB), `base` (56 MB). It is loaded once when the service starts.
+  Terms become the initial prompt. Measured here (RTX 5060 Ti): 27 s of speech in 0.9 s on the
+  GPU, ~13 s on the CPU.
 
 ```toml
-provider = "openrouter"
+provider = "openrouter"   # or "local"
 
-[providers.openrouter]
-kind = "chat-audio"
-base_url = "https://openrouter.ai/api/v1"
-key_env = "OPENROUTER_API_KEY"
-api_key = "sk-or-…"
+[openrouter]
+api_key = "sk-or-…"        # empty: OPENROUTER_API_KEY
 model = "openai/gpt-audio-mini"
 
-[providers.local-command]
-kind = "command"
-command = "whisper-cli -m ~/models/ggml-large-v3-turbo.bin -l {lang} -nt -np -f {wav}"
+[local]
+model = "large-v3-turbo"
 ```
 
 ## Languages
@@ -84,14 +78,14 @@ command = "whisper-cli -m ~/models/ggml-large-v3-turbo.bin -l {lang} -nt -np -f 
 
 ## Commands
 
-- `imla setup [--provider NAME] [--model ID] [--shortcut KEYS] [--language xx] [--terminal-paste]`: provider, key, model, terms; enables and restarts the service
-- `imla providers` · `imla use <name>` · `imla model [id]`: list, switch, change the model (the service restarts itself)
+- `imla setup [--provider openrouter|local] [--model ID] [--shortcut KEYS] [--language xx] [--terminal-paste]`: provider, key or local model (downloaded), terms; enables and restarts the service
+- `imla use openrouter|local` · `imla model [id]`: switch, show/change the model (the service restarts itself)
 - `imla status`: ready / listening / transcribing, or not running
 - Hidden: `daemon` (run by systemd), `toggle` (start/stop without the shortcut), `transcribe x.wav`, `hud-demo`, `render-demo out.rgb` (offscreen HUD frames; `docs/hud.gif` is made from it with ffmpeg)
 - Logs: `journalctl --user -u imla -f` · Remove: `sudo pacman -R imla`
 
 ## Config (`~/.config/imla/config.toml`, 0600)
 
-`provider` / `[providers.*]` (above), `sound_effects` / `sound_volume` (start/stop/cancel tones via `pw-play`, default on, 0.5), `language` (`auto` = written in whatever language is spoken, mixed speech kept as spoken; or an ISO 639-1 code such as `tr`, `en`, `de`; `imla setup --language xx`), `terms` (list), `shortcut`, `paste_keys`
+`provider`, `[openrouter]`, `[local]` (above), `sound_effects` / `sound_volume` (start/stop/cancel tones via `pw-play`, default on, 0.5), `language` (`auto` = written in whatever language is spoken, mixed speech kept as spoken; or an ISO 639-1 code such as `tr`, `en`, `de`; `imla setup --language xx`), `terms` (list), `shortcut`, `paste_keys`
 (`ctrl+v` / `ctrl+shift+v`), `restore_clipboard`, `max_seconds`. `OPENROUTER_API_KEY` in the
 environment is used when `api_key` is empty.
