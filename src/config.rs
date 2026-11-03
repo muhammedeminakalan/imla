@@ -29,6 +29,10 @@ pub struct Config {
     pub paste_keys: String,
     /// Put the previous clipboard text back after pasting.
     pub restore_clipboard: bool,
+    /// Play Hex's recording tones (start, stop, dropped).
+    pub sound_effects: bool,
+    /// Tone volume, 0 to 1.
+    pub sound_volume: f32,
     /// Recording stops by itself after this many seconds.
     pub max_seconds: u64,
 }
@@ -43,6 +47,8 @@ impl Default for Config {
             shortcut: "CTRL+ALT+D".into(),
             paste_keys: "ctrl+v".into(),
             restore_clipboard: true,
+            sound_effects: true,
+            sound_volume: 0.5,
             max_seconds: 120,
         }
     }

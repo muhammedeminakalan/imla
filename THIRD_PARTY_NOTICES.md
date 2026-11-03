@@ -28,3 +28,6 @@ License:
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
+
+The recording tones in `assets/sounds/` (start, stop, cancel) are Hex's "classic" sound set
+(`resources/audio/sounds/classic/`), under the same MIT license above.

@@ -5,6 +5,7 @@ mod config;
 mod hud;
 mod paste;
 mod recorder;
+mod sounds;
 mod transcribe;
 
 use std::{
@@ -227,6 +228,7 @@ async fn daemon() -> Result<()> {
                             }
                         });
                         let _ = hud.send(HudMsg::Listen);
+                        sounds::play(&cfg, sounds::Sound::Start);
                         listening.store(true, Ordering::SeqCst);
                         deadline = tokio::time::Instant::now() + Duration::from_secs(cfg.max_seconds);
                         active = Some(Active { rec, pressed: Instant::now(), latched: false });
@@ -245,6 +247,7 @@ async fn daemon() -> Result<()> {
             (Event::Press, Some(a)) if !a.latched => active = Some(a),
             (_, Some(a)) => {
                 listening.store(false, Ordering::SeqCst);
+                sounds::play(&cfg, sounds::Sound::Stop);
                 busy.fetch_add(1, Ordering::SeqCst);
                 let (cfg, hud, paster, conn, busy) =
                     (cfg.clone(), hud.clone(), paster.clone(), conn.clone(), busy.clone());
@@ -279,6 +282,7 @@ async fn finish(
 ) -> Result<()> {
     if recorder::is_silent(&samples) {
         let _ = hud.send(HudMsg::Hide);
+        sounds::play(cfg, sounds::Sound::Cancel);
         return Ok(());
     }
     let _ = hud.send(HudMsg::Busy);
