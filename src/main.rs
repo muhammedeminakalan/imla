@@ -167,7 +167,7 @@ fn parse_cli() -> Cli {
         .mut_arg("help", |a| a.help(t("Yardımı göster", "Show help")))
         .mut_arg("version", |a| a.help(t("Sürümü göster", "Show version")))
         .mut_subcommand("setup", |c| {
-            c.about(t("API anahtarını kaydet, kısayolu ve arka plan servisini kur", "Save the API key, set up the shortcut and the background service"))
+            c.about(t("Sağlayıcıyı ve modeli seç, anahtarı kaydet, kısayolu ve servisi kur", "Choose the provider and model, save the key, set up the shortcut and the service"))
                 .help_template(sub.clone())
                 .override_usage(t("imla setup [SEÇENEKLER]", "imla setup [OPTIONS]"))
                 .mut_arg("provider", |a| a.help(t("Sağlayıcı profili: openrouter, openai, groq, gemini, mistral, local-server, local-command ya da kendi adın", "Provider profile: openrouter, openai, groq, gemini, mistral, local-server, local-command or your own name")).value_name(t("AD", "NAME")))
