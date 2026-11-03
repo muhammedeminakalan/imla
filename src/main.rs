@@ -275,7 +275,9 @@ async fn finish(
     }
     let _ = hud.send(HudMsg::Busy);
     let started = Instant::now();
-    let text = transcribe::transcribe(cfg, &recorder::wav(&samples)).await?;
+    let wav = recorder::wav(&samples);
+    save_last_clip(&wav);
+    let text = transcribe::transcribe(cfg, &wav).await?;
     log::info!(
         "{:.1} sn ses, {:.1} sn'de çözüldü: {} karakter",
         samples.len() as f32 / recorder::SAMPLE_RATE as f32,
@@ -307,6 +309,23 @@ async fn finish(
         }
     }
     Ok(())
+}
+
+/// Keeps the latest clip (owner-only, overwritten each time) so a bad result can be checked.
+fn save_last_clip(wav: &[u8]) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = config::state_dir();
+    let _ = fs::create_dir_all(&dir);
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(dir.join("last.wav"))
+        .and_then(|mut f| f.write_all(wav));
+    if let Err(e) = written {
+        log::warn!("son kayıt saklanamadı: {e}");
+    }
 }
 
 fn spawn_control_socket(

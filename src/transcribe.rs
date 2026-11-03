@@ -81,7 +81,8 @@ fn looks_like_reply(text: &str) -> bool {
     let t = text.to_lowercase();
     [
         "üzgünüm, bu isteği", "yerine getiremiyorum", "yardımcı olamam", "yardımcı olmamı",
-        "bu konuda yardımcı", "ben bir yapay zeka", "i'm sorry", "i am sorry", "i can't help",
+        "bu konuda yardımcı", "ben bir yapay zeka", "algılayamıyorum", "anlayamıyorum",
+        "net bir ses kaydı", "ses kaydı sağla", "i'm sorry", "can't hear", "no audio", "i am sorry", "i can't help",
         "i cannot help", "as an ai", "can't assist", "cannot assist",
     ]
     .iter()

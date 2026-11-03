@@ -20,7 +20,7 @@ pub struct Recording {
 /// Starts recording; `levels` receives the loudness (0..1) of every ~32 ms chunk.
 pub fn start(levels: mpsc::UnboundedSender<f32>) -> Result<Recording> {
     let mut child = Command::new("pw-record")
-        .args(["--rate", &SAMPLE_RATE.to_string(), "--channels", "1", "--format", "s16", "-"])
+        .args(["--raw", "--rate", &SAMPLE_RATE.to_string(), "--channels", "1", "--format", "s16", "-"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
