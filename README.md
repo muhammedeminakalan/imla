@@ -38,7 +38,7 @@ sudo pacman -U packaging/arch/imla-*-x86_64.pkg.tar.zst
 imla setup                                 # once per user: key, terms; enables the user service
 ```
 
-The package ships `/usr/bin/imla`, the user unit `app-dev.akalan.imla.service` and the
+The package ships `/usr/bin/imla`, the user unit `imla.service` and the
 `.desktop` entry. `setup` enables the packaged unit. Version: `pkgver` in
 the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 
@@ -52,7 +52,7 @@ the PKGBUILD = `version` in Cargo.toml = git tag `vX.Y.Z`.
 - `imla setup [--shortcut KEYS] [--terminal-paste]`: key, terms; enables and restarts the service
 - `imla status`: ready / listening / transcribing, or not running
 - Hidden: `daemon` (run by systemd), `toggle` (start/stop without the shortcut), `transcribe x.wav`, `hud-demo`
-- Logs: `journalctl --user -u app-dev.akalan.imla -f` · Remove: `sudo pacman -R imla`
+- Logs: `journalctl --user -u imla -f` · Remove: `sudo pacman -R imla`
 
 ## Config (`~/.config/imla/config.toml`, 0600)
 

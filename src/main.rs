@@ -42,8 +42,9 @@ use crate::{
 };
 
 const SHORTCUT_ID: &str = "imla";
-/// The portal also derives the app id from the unit name (app-<id>.service).
-const UNIT: &str = "app-dev.akalan.imla.service";
+/// The portal learns the app id from `register_host_app` (tested: shortcut and keyboard grant
+/// survive without the `app-<id>.service` naming).
+const UNIT: &str = "imla.service";
 /// A press shorter than this latches recording on until the next press (tap to start, tap to stop).
 const TAP: Duration = Duration::from_millis(350);
 
@@ -465,8 +466,10 @@ async fn setup(shortcut: Option<String>, language: Option<String>, terminal_past
     println!("{}", tf!("Ayarlar kaydedildi: {}", "Settings saved: {}", config::path().display()));
 
     systemctl(&["daemon-reload"])?;
-    // the service under the project's former name, if it is still enabled
-    let _ = systemctl(&["disable", "--now", "app-dev.akalan.dictate.service"]);
+    // services under earlier names, if still enabled
+    for old in ["app-dev.akalan.dictate.service", "app-dev.akalan.imla.service"] {
+        let _ = systemctl(&["disable", "--now", old]);
+    }
     systemctl(&["enable", UNIT])?;
     systemctl(&["restart", UNIT])?;
     let sc = &cfg.shortcut;
@@ -476,11 +479,11 @@ async fn setup(shortcut: Option<String>, language: Option<String>, terminal_past
             "\nServis başladı. KDE şimdi iki pencere açabilir:\n  1. Kısayolu onayla (önerilen: {sc}; istersen değiştir).\n  \
              2. Klavye denetimine izin ver (yapıştırmak için; bir kez sorulur).\n\n\
              Kullanım: kısayola basılı tut, konuş, bırak. Kısa bas: konuşmayı bitirince yine kısa bas.\n\
-             Durum: `imla status` · Kayıtlar: `journalctl --user -u app-dev.akalan.imla -f`",
+             Durum: `imla status` · Kayıtlar: `journalctl --user -u imla -f`",
             "\nThe service started. KDE may now open two dialogs:\n  1. Confirm the shortcut (suggested: {sc}; change it if you like).\n  \
              2. Allow keyboard control (for pasting; asked once).\n\n\
              Use: hold the shortcut, speak, release. Tap: tap again when you are done speaking.\n\
-             Status: `imla status` · Logs: `journalctl --user -u app-dev.akalan.imla -f`"
+             Status: `imla status` · Logs: `journalctl --user -u imla -f`"
         )
     );
     Ok(())

@@ -2,7 +2,7 @@
 # Packages the binary built in this repository (`make dist`, Rust in Docker); nothing is
 # compiled here, so makepkg needs no Rust toolchain.
 pkgname=imla
-pkgver=0.2.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc='Push-to-talk dictation for KDE Plasma (Wayland): hold a shortcut, speak, the text is pasted'
 arch=('x86_64')
@@ -18,8 +18,8 @@ _root="$startdir/../.."
 
 package() {
   install -Dm755 "$_root/dist/imla" "$pkgdir/usr/bin/imla"
-  install -Dm644 "$_root/packaging/app-dev.akalan.imla.service" \
-    "$pkgdir/usr/lib/systemd/user/app-dev.akalan.imla.service"
+  install -Dm644 "$_root/packaging/imla.service" \
+    "$pkgdir/usr/lib/systemd/user/imla.service"
   install -Dm644 "$_root/packaging/dev.akalan.imla.desktop" \
     "$pkgdir/usr/share/applications/dev.akalan.imla.desktop"
   install -Dm644 "$_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
