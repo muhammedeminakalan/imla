@@ -61,32 +61,7 @@ pub async fn transcribe(cfg: &Config, wav: &[u8]) -> Result<String> {
         ],
     });
     let v = send(post(cfg, "chat/completions", &body)).await?;
-    let text = clean(v["choices"][0]["message"]["content"].as_str().unwrap_or_default());
-    if !looks_like_reply(&text) || cfg.fallback_model.is_empty() {
-        return Ok(text);
-    }
-    // a chat model answered the speech instead of transcribing it; a pure STT model can't
-    log::warn!("{} yazıya dökmek yerine cevap verdi, {} ile yeniden", cfg.model, cfg.fallback_model);
-    let body = json!({
-        "model": cfg.fallback_model,
-        "input_audio": {"data": audio, "format": "wav"},
-        "language": cfg.language,
-    });
-    let v = send(post(cfg, "audio/transcriptions", &body)).await?;
-    Ok(clean(v["text"].as_str().unwrap_or_default()))
-}
-
-/// Typical assistant refusals/replies that are not a transcript.
-fn looks_like_reply(text: &str) -> bool {
-    let t = text.to_lowercase();
-    [
-        "üzgünüm, bu isteği", "yerine getiremiyorum", "yardımcı olamam", "yardımcı olmamı",
-        "bu konuda yardımcı", "ben bir yapay zeka", "algılayamıyorum", "anlayamıyorum",
-        "net bir ses kaydı", "ses kaydı sağla", "i'm sorry", "can't hear", "no audio", "i am sorry", "i can't help",
-        "i cannot help", "as an ai", "can't assist", "cannot assist",
-    ]
-    .iter()
-    .any(|p| t.contains(p))
+    Ok(clean(v["choices"][0]["message"]["content"].as_str().unwrap_or_default()))
 }
 
 /// Drops wrapping quotes or code fences some models add despite the prompt.
@@ -111,12 +86,5 @@ mod tests {
     fn prompt_lists_terms() {
         let cfg = Config { terms: vec!["Gülendam Afra".into(), "JSON".into()], ..Config::default() };
         assert!(system_prompt(&cfg).contains("Gülendam Afra, JSON"));
-    }
-
-    #[test]
-    fn refusals_are_detected() {
-        assert!(looks_like_reply("Üzgünüm, bu isteği yerine getiremiyorum. Lütfen başka bir konuda yardımcı olmamı isteyin."));
-        assert!(looks_like_reply("I'm sorry, I can't help with that."));
-        assert!(!looks_like_reply("Yarın saat üçte toplantı var, hazırlan."));
     }
 }

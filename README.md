@@ -47,6 +47,6 @@ System Settings → Shortcuts) and to allow keyboard control (for pasting).
 
 ## Config (`~/.config/dictate/config.toml`, 0600)
 
-`api_key`, `model`, `fallback_model` (pure STT model used when the chat model answers/refuses instead of transcribing; default `openai/gpt-transcribe`), `language` (`tr`), `terms` (list), `shortcut`, `paste_keys`
+`api_key`, `model`, `language` (`tr`), `terms` (list), `shortcut`, `paste_keys`
 (`ctrl+v` / `ctrl+shift+v`), `restore_clipboard`, `max_seconds`. `OPENROUTER_API_KEY` in the
 environment is used when `api_key` is empty.
